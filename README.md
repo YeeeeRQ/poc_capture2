@@ -1,109 +1,87 @@
 # Capture
 
-Windows 10/11 屏幕截图 + 录屏 CLI 工具，使用 Rust 构建。
-
-## 功能
-
-- **截图** — 捕获单个显示器的全屏图像，输出 PNG 或 JPEG
-- **录屏** — 实时录制屏幕为 H.264 MP4 视频，支持自定义帧率和时长
-- **列出显示器** — 查看所有可用显示器及其分辨率
-
-## 依赖
-
-### FFmpeg（必需）
-
-FFmpeg 用于视频编码。工具会自动按以下顺序查找：
-
-1. `FFMPEG_PATH` 环境变量指定的路径
-2. `capture.exe` 可执行文件同级目录
-3. `bin/ffmpeg.exe`
-4. 系统 PATH
-
-推荐使用 **静态编译版本**（如 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 的 full_build-static），只需复制 `ffmpeg.exe` 和 `ffprobe.exe` 两个文件即可，无需 DLL。
-
-## 构建
-
-```bash
-# 开发构建
-cargo build
-
-# 发布构建
-cargo build --release
-```
-
-## 使用方法
-
-### 列出显示器
-
-```bash
-capture list-monitors
-```
-
-### 截图
-
-```bash
-# 默认截图到当前目录（PNG 格式）
-capture screenshot
-
-# 指定显示器、输出路径、JPEG 格式
-capture screenshot -m 0 -o screenshot.jpg -f jpg -q 85
-
-# 参数说明
-# -m, --monitor   显示器索引（0 = 主屏）
-# -o, --output    输出文件路径
-# -f, --format    输出格式：png 或 jpg
-# -q, --quality   JPEG 质量 0-100
-```
-
-### 录屏
-
-```bash
-# 录制（Ctrl+C 停止）
-capture record
-
-# 指定显示器、输出路径、帧率、时长
-capture record -m 0 -o video.mp4 -f 30 --duration 60 --preset medium
-
-# 参数说明
-# -m, --monitor   显示器索引（0 = 主屏）
-# -o, --output    输出文件路径
-# -f, --fps       帧率（默认 30）
-# --duration      最大录制时长（秒），到达后自动停止
-# --preset        FFmpeg 编码速度预设
-#                 ultrafast > superfast > veryfast > faster > fast > medium > slow > slower > veryslow
-#                 越快文件越大，越慢文件越小质量越高（默认 medium）
-```
-
-## 技术细节
-
-| 模块 | 技术 |
-|------|------|
-| 屏幕捕获 | [xcap](https://crates.io/crates/xcap)（DXGI Desktop Duplication API） |
-| 图片编码 | [image](https://crates.io/crates/image) crate |
-| 视频编码 | FFmpeg（libx264 + H.264） |
-| CLI | [clap](https://crates.io/crates/clap) v4 |
-| 进程保护 | [ctrlc](https://crates.io/crates/ctrlc)（优雅处理 Ctrl+C） |
+Windows 10/11 屏幕截图 + 录屏工具，提供 CLI 和 GUI 两种界面。
 
 ## 项目结构
 
 ```
-src/
-├── main.rs              # CLI 入口
-├── encoder.rs           # FFmpeg 封装（stdin pipe 实时编码）
-├── capture/
-│   ├── screenshot.rs   # 截图实现
-│   └── recorder.rs     # 录屏实现
-└── cli/
-    └── mod.rs           # clap 命令定义
-bin/                    # FFmpeg 二进制文件（自行添加，gitignore）
+capture-core/              # 共享核心库（screenshot + recorder + encoder）
+capture-cli/               # CLI 二进制
+capture-gui/              # GUI 二进制（egui frameless 工具条）
+bin/                      # FFmpeg 静态二进制（自行添加，gitignore）
+src_old/                  # 废弃的旧实现（参考用）
 ```
 
-## 分发
+## 快速开始
 
-复制 `target/release/capture.exe` 和 FFmpeg 二进制到同一目录即可分发，无需安装 Rust 或其他依赖：
+### 构建
+
+```bash
+# 构建所有
+cargo build --release
+
+# 仅构建 CLI
+cargo build -p capture-cli --release
+
+# 仅构建 GUI
+cargo build -p capture-gui --release
+```
+
+### 准备 FFmpeg
+
+将 `ffmpeg.exe` 和 `ffprobe.exe` 复制到 release 目录：
+
+```bash
+cp bin/ffmpeg.exe target/release/
+cp bin/ffprobe.exe target/release/
+```
+
+### CLI 使用
+
+```bash
+# 列出显示器
+capture-cli list-monitors
+
+# 截图
+capture-cli screenshot -m 0 -o out.png -f jpg -q 85
+
+# 录屏（Ctrl+C 停止）
+capture-cli record -m 0 -o video.mp4 -f 30 --preset medium
+```
+
+### GUI 使用
+
+```bash
+./capture-gui.exe
+```
+
+GUI 是一个无边框浮动工具条，包含：
+- 显示器选择
+- 截图按钮
+- 录制/停止按钮
+- FPS 调节
+- 关闭按钮（最小化到后台）
+
+窗口默认置顶，关闭按钮将窗口隐藏（进程继续运行）。
+
+## 技术栈
+
+| 模块 | 技术 |
+|------|------|
+| 屏幕捕获 | xcap (DXGI Desktop Duplication) |
+| 图片编码 | image crate |
+| 视频编码 | FFmpeg libx264 (H.264) |
+| GUI 框架 | eframe/egui |
+| CLI | clap v4 |
+| 线程管理 | parking_lot |
+
+## 二进制分发
 
 ```
-capture.exe
-ffmpeg.exe
+capture-gui.exe    # GUI 版本（~7MB）
+capture-cli.exe    # CLI 版本（~1.2MB）
+ffmpeg.exe         # FFmpeg 静态编译版
 ffprobe.exe
 ```
+
+仅需以上四个文件，无需安装任何运行时。
