@@ -16,12 +16,17 @@ pub fn show(
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
             let rect = ui.max_rect();
+            let expanded_rect = rect.expand(1.0);
+            let corner_radius = 8.0;
             ui.painter().rect(
                 rect.expand(1.0),
-                8.0,
+                corner_radius,
                 bg,
-                egui::Stroke::new(0.0, egui::Color32::TRANSPARENT),
-                egui::StrokeKind::Inside,
+                egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 255),
+                ),
+                egui::StrokeKind::Outside,
             );
 
             ui.allocate_ui(rect.size(), |ui| {
@@ -178,7 +183,7 @@ pub fn show(
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
 
-                        let drag_rect = record_icon.rect.union(record_btn.rect).expand(16.0);
+                        let drag_rect = record_icon.rect.expand(4.0);
                         let drag_resp =
                             ui.interact(drag_rect, egui::Id::new("drag"), egui::Sense::click());
                         if drag_resp.hovered() {
