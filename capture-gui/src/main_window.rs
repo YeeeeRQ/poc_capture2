@@ -21,21 +21,16 @@ pub fn show(
         })
         .show(ctx, |ui| {
             let rect = ui.max_rect();
-            let container_width = 430.0_f32.min(rect.width());
-            let container_rect = egui::Rect::from_min_size(
-                rect.min,
-                egui::Vec2::new(container_width, rect.height()),
-            );
 
             ui.painter().rect(
-                container_rect,
-                8.0,
+                rect,
+                0.0,
                 bg,
                 egui::Stroke::new(0.0, egui::Color32::TRANSPARENT),
                 egui::StrokeKind::Inside,
             );
 
-            ui.allocate_ui(container_rect.size(), |ui| {
+            ui.allocate_ui(rect.size(), |ui| {
                 let avail_h = ui.available_height();
                 let toolbar_h = 44.0_f32;
                 let top_space = ((avail_h - toolbar_h) / 2.0).max(0.0);
