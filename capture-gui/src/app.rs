@@ -8,14 +8,21 @@ use eframe::egui;
 use parking_lot::Mutex;
 
 use capture_core::{
-    list_monitors, take_screenshot, RecordSettings, RecorderHandle, ScreenshotRequest,
+    list_monitors, take_screenshot, MonitorInfo, RecordSettings, RecorderHandle, ScreenshotRequest,
     ScreenshotSettings,
 };
 
+use crate::settings::Settings;
+
+const FORMAT_OPTIONS: &[&str] = &["jpg", "png", "bmp"];
+const QUALITY_OPTIONS: &[u8] = &[20, 40, 60, 80, 100];
+
+static SETTINGS_VIEWPORT_ID: std::sync::LazyLock<egui::ViewportId> =
+    std::sync::LazyLock::new(|| egui::ViewportId::from_hash_of("settings_viewport"));
+
 pub struct CaptureApp {
-    monitors: Vec<(usize, u32, u32)>,
+    monitors: Vec<MonitorInfo>,
     selected_monitor: usize,
-    target_fps: u32,
     is_recording: bool,
     record_start: Option<Instant>,
     is_pinned: bool,
@@ -23,46 +30,50 @@ pub struct CaptureApp {
     join_handle:
         Mutex<Option<std::thread::JoinHandle<std::result::Result<PathBuf, anyhow::Error>>>>,
     quit_flag: Arc<AtomicBool>,
+    screenshot_loading: bool,
+    screenshot_loading_pending: Arc<AtomicBool>,
+    settings: Settings,
+    settings_open: Arc<AtomicBool>,
 }
 
 impl CaptureApp {
-    pub fn new(quit_flag: Arc<AtomicBool>) -> Self {
-        let monitors = list_monitors()
-            .map(|v| {
-                v.into_iter()
-                    .map(|m| (m.index, m.width, m.height))
-                    .collect()
-            })
-            .unwrap_or_default();
+    pub fn new(quit_flag: Arc<AtomicBool>, settings: Settings) -> Self {
+        let monitors = list_monitors().unwrap_or_default();
 
         Self {
             monitors,
             selected_monitor: 0,
-            target_fps: 60,
             is_recording: false,
             record_start: None,
             is_pinned: true,
             handle: Mutex::new(None),
             join_handle: Mutex::new(None),
             quit_flag,
+            screenshot_loading: false,
+            screenshot_loading_pending: Arc::new(AtomicBool::new(false)),
+            settings,
+            settings_open: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn screenshot(&self) {
+    fn screenshot(&mut self) {
         if self.selected_monitor >= self.monitors.len() {
             return;
         }
+        let ext = self.settings.screenshot_format.clone();
         let path = std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(format!(
-                "screenshot_{}.bmp",
-                Local::now().format("%Y%m%d_%H%M%S")
+                "screenshot_{}.{}",
+                Local::now().format("%Y%m%d_%H%M%S"),
+                ext
             ));
         let request = ScreenshotRequest {
-            path,
-            format: "bmp".to_string(),
-            quality: 90,
+            path: path.clone(),
+            format: ext.clone(),
+            quality: self.settings.screenshot_quality,
         };
+        self.screenshot_loading = true;
         if self.is_recording {
             if let Some(ref handle) = *self.handle.lock() {
                 handle.take_screenshot(request);
@@ -71,13 +82,18 @@ impl CaptureApp {
             match take_screenshot(&ScreenshotSettings {
                 monitor_index: self.selected_monitor,
                 output_path: None,
-                format: "bmp".to_string(),
-                quality: 90,
+                format: ext,
+                quality: self.settings.screenshot_quality,
             }) {
                 Ok(p) => log::info!("Screenshot saved: {}", p.display()),
                 Err(e) => log::error!("Screenshot failed: {}", e),
             }
         }
+        let pending = Arc::clone(&self.screenshot_loading_pending);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            pending.store(true, Ordering::SeqCst);
+        });
     }
 
     fn toggle_recording(&mut self) {
@@ -96,7 +112,7 @@ impl CaptureApp {
             monitor_index: self.selected_monitor,
             output_path: None,
             duration_secs: None,
-            target_fps: self.target_fps,
+            target_fps: self.settings.fps,
             preset: "medium".to_string(),
         };
 
@@ -154,31 +170,219 @@ impl eframe::App for CaptureApp {
 
         let txt = egui::Color32::from_rgb(215, 215, 225);
 
+        if self.settings_open.load(Ordering::SeqCst) {
+            let settings_open = Arc::clone(&self.settings_open);
+            let local_settings = Arc::new(Mutex::new(self.settings.clone()));
+
+            ctx.show_viewport_deferred(
+                *SETTINGS_VIEWPORT_ID,
+                egui::ViewportBuilder::default()
+                    .with_title("设置")
+                    .with_inner_size([260.0, 300.0])
+                    .with_decorations(false)
+                    .with_resizable(false),
+                move |ctx, _class| {
+                    let bg = egui::Color32::from_rgb(30, 30, 42);
+                    let label_col = egui::Color32::from_rgb(180, 180, 190);
+
+                    egui::CentralPanel::default()
+                        .frame(
+                            egui::Frame::default()
+                                .fill(bg)
+                                .inner_margin(egui::Margin::same(12)),
+                        )
+                        .show(ctx, |ui| {
+                            ui.set_min_height(220.0);
+
+                            let drag_rect = ui.min_rect();
+                            let drag_resp = ui.interact(
+                                drag_rect,
+                                egui::Id::new("settings_drag"),
+                                egui::Sense::click(),
+                            );
+                            if drag_resp.hovered() {
+                                ctx.set_cursor_icon(egui::CursorIcon::Grab);
+                            }
+                            if drag_resp.is_pointer_button_down_on() {
+                                ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+                                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            }
+
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("设置")
+                                        .color(egui::Color32::WHITE)
+                                        .size(16.0)
+                                        .strong(),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .add_sized(
+                                                [24.0, 24.0],
+                                                egui::Button::new(
+                                                    egui::RichText::new("×").size(18.0).color(
+                                                        egui::Color32::from_rgb(180, 180, 190),
+                                                    ),
+                                                ),
+                                            )
+                                            .clicked()
+                                        {
+                                            settings_open.store(false, Ordering::SeqCst);
+                                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                        }
+                                    },
+                                );
+                            });
+
+                            ui.add_space(8.0);
+
+                            ui.label(egui::RichText::new("帧率").color(label_col).size(12.0));
+
+                            {
+                                let mut settings = local_settings.lock();
+                                let fps_label = if settings.fps == 15 {
+                                    "15 fps"
+                                } else if settings.fps == 30 {
+                                    "30 fps"
+                                } else {
+                                    "60 fps"
+                                };
+                                egui::ComboBox::from_id_salt("fps")
+                                    .selected_text(fps_label)
+                                    .width(120.0)
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut settings.fps, 15u32, "15 fps");
+                                        ui.selectable_value(&mut settings.fps, 30u32, "30 fps");
+                                        ui.selectable_value(&mut settings.fps, 60u32, "60 fps");
+                                    });
+                            }
+
+                            ui.add_space(8.0);
+
+                            ui.label(egui::RichText::new("截图格式").color(label_col).size(12.0));
+
+                            {
+                                let mut settings = local_settings.lock();
+                                let mut current_fmt = settings.screenshot_format.clone();
+                                egui::ComboBox::from_id_salt("fmt")
+                                    .selected_text(current_fmt.to_uppercase())
+                                    .width(120.0)
+                                    .show_ui(ui, |ui| {
+                                        for &fmt in FORMAT_OPTIONS {
+                                            ui.radio_value(
+                                                &mut current_fmt,
+                                                fmt.to_string(),
+                                                fmt.to_uppercase(),
+                                            );
+                                        }
+                                    });
+                                if current_fmt != settings.screenshot_format {
+                                    settings.screenshot_format = current_fmt;
+                                }
+                            }
+
+                            ui.add_space(8.0);
+
+                            ui.label(egui::RichText::new("截图品质").color(label_col).size(12.0));
+                            {
+                                let mut settings = local_settings.lock();
+                                egui::ComboBox::from_id_salt("q")
+                                    .selected_text(format!("Q{}", settings.screenshot_quality))
+                                    .width(120.0)
+                                    .show_ui(ui, |ui| {
+                                        for &q in QUALITY_OPTIONS {
+                                            ui.selectable_value(
+                                                &mut settings.screenshot_quality,
+                                                q,
+                                                format!("Q{}", q),
+                                            );
+                                        }
+                                    });
+                            }
+
+                            ui.add_space(16.0);
+
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_sized(
+                                        [100.0, 32.0],
+                                        egui::Button::new(
+                                            egui::RichText::new("取消")
+                                                .color(egui::Color32::from_rgb(180, 180, 190))
+                                                .size(13.0),
+                                        )
+                                        .fill(
+                                            egui::Color32::from_rgba_unmultiplied(
+                                                255, 255, 255, 12,
+                                            ),
+                                        ),
+                                    )
+                                    .clicked()
+                                {
+                                    settings_open.store(false, Ordering::SeqCst);
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+
+                                ui.add_space(6.0);
+
+                                if ui
+                                    .add_sized(
+                                        [130.0, 32.0],
+                                        egui::Button::new(
+                                            egui::RichText::new("保存并退出")
+                                                .color(egui::Color32::BLACK)
+                                                .size(13.0)
+                                                .strong(),
+                                        )
+                                        .fill(egui::Color32::from_rgb(80, 200, 120)),
+                                    )
+                                    .clicked()
+                                {
+                                    let settings = local_settings.lock();
+                                    if let Err(e) = settings.save() {
+                                        log::error!("Failed to save settings: {}", e);
+                                    }
+                                    drop(settings);
+                                    settings_open.store(false, Ordering::SeqCst);
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                            });
+                        });
+
+                    if ctx.input(|i| i.viewport().close_requested()) {
+                        settings_open.store(false, Ordering::SeqCst);
+                    }
+                },
+            );
+        }
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
                     .fill(bg)
-                    .inner_margin(egui::Margin::same(0.0)),
+                    .inner_margin(egui::Margin::same(0)),
             )
             .show(ctx, |ui| {
                 ui.set_min_height(44.0);
                 ui.horizontal(|ui| {
                     ui.set_min_height(44.0);
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.add_space(10.0);
+                    ui.spacing_mut().item_spacing.x = 6.0;
 
-                    let drag_rect = egui::Rect::from_min_size(
-                        ui.min_rect().min,
-                        egui::vec2(ui.available_width(), 10.0),
-                    );
-                    if ui
-                        .interact(drag_rect, egui::Id::new("drag"), egui::Sense::click())
-                        .is_pointer_button_down_on()
-                    {
+                    let drag_rect = ui.min_rect();
+                    let drag_response =
+                        ui.interact(drag_rect, egui::Id::new("drag"), egui::Sense::click());
+                    if drag_response.hovered() {
+                        ctx.set_cursor_icon(egui::CursorIcon::Grab);
+                    }
+                    if drag_response.is_pointer_button_down_on() {
+                        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                         ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                     }
 
-                    ui.label(
+                    let _ = ui.selectable_label(
+                        false,
                         egui::RichText::new(if self.is_recording { "⏺" } else { "📷" })
                             .color(if self.is_recording {
                                 egui::Color32::from_rgb(255, 100, 100)
@@ -191,19 +395,19 @@ impl eframe::App for CaptureApp {
                     egui::ComboBox::from_id_salt("mon")
                         .selected_text({
                             if self.selected_monitor < self.monitors.len() {
-                                let (_, w, h) = &self.monitors[self.selected_monitor];
-                                format!("{w}x{h}")
+                                let m = &self.monitors[self.selected_monitor];
+                                format!("[{}] {}", m.index, m.name)
                             } else {
                                 "Unknown".to_string()
                             }
                         })
-                        .width(120.0)
+                        .width(160.0)
                         .show_ui(ui, |ui| {
-                            for (i, (_, w, h)) in self.monitors.iter().enumerate() {
+                            for m in &self.monitors {
                                 ui.selectable_value(
                                     &mut self.selected_monitor,
-                                    i,
-                                    format!("{w}x{h}"),
+                                    m.index,
+                                    format!("[{}] {} ({}x{})", m.index, m.name, m.width, m.height),
                                 );
                             }
                         });
@@ -215,22 +419,19 @@ impl eframe::App for CaptureApp {
                                 .size(14.0)
                                 .strong(),
                         );
-                    } else {
-                        ui.add(
-                            egui::DragValue::new(&mut self.target_fps)
-                                .range(1..=120)
-                                .suffix(" fps")
-                                .speed(1.0),
-                        );
                     }
 
                     if ui
                         .add_sized(
                             [60.0, 28.0],
                             egui::Button::new(
-                                egui::RichText::new("截图")
-                                    .color(egui::Color32::BLACK)
-                                    .size(12.0),
+                                egui::RichText::new(if self.screenshot_loading {
+                                    "..."
+                                } else {
+                                    "截图"
+                                })
+                                .color(egui::Color32::WHITE)
+                                .size(12.0),
                             )
                             .fill(egui::Color32::from_rgb(80, 200, 120)),
                         )
@@ -295,10 +496,30 @@ impl eframe::App for CaptureApp {
                         ));
                     }
 
+                    let settings_txt = txt;
+
                     if ui
                         .add_sized(
                             [28.0, 28.0],
-                            egui::Button::new(egui::RichText::new("✕").size(14.0).color(txt)),
+                            egui::Button::new(
+                                egui::RichText::new("⚙").size(14.0).color(settings_txt),
+                            )
+                            .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)),
+                        )
+                        .clicked()
+                    {
+                        self.settings_open.store(true, Ordering::SeqCst);
+                    }
+
+                    if ui
+                        .add_sized(
+                            [28.0, 28.0],
+                            egui::Button::new(
+                                egui::RichText::new("❌")
+                                    .size(12.0)
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(220, 70, 70)),
                         )
                         .clicked()
                     {
@@ -306,10 +527,14 @@ impl eframe::App for CaptureApp {
                         self.stop_recording();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
-
-                    ui.add_space(10.0);
                 });
             });
+
+        if self.screenshot_loading_pending.load(Ordering::SeqCst) {
+            self.screenshot_loading_pending
+                .store(false, Ordering::SeqCst);
+            self.screenshot_loading = false;
+        }
 
         if self.is_recording {
             ctx.request_repaint_after(Duration::from_millis(500));

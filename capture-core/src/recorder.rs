@@ -15,17 +15,20 @@ use super::capture_adapter::{
 use windows_capture::capture::CaptureControl;
 
 pub struct RecorderHandle {
-    stop_flag: Arc<Mutex<bool>>,
-    done_flag: Arc<Mutex<bool>>,
-    done_condvar: Arc<Condvar>,
+    #[allow(dead_code)]
     control: CaptureControl<
         super::capture_adapter::CaptureHandler,
         Box<dyn std::error::Error + Send + Sync>,
     >,
+    #[allow(dead_code)]
+    screenshot_stopped: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    screenshot_join_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+    stop_flag: Arc<Mutex<bool>>,
+    done_flag: Arc<Mutex<bool>>,
+    done_condvar: Arc<Condvar>,
     screenshot_request: Arc<Mutex<Option<ScreenshotRequest>>>,
     screenshot_done: Arc<Condvar>,
-    screenshot_stopped: Arc<AtomicBool>,
-    screenshot_join_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl RecorderHandle {
