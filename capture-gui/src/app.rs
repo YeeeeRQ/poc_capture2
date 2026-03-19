@@ -34,6 +34,7 @@ pub struct CaptureApp {
     screenshot_loading_pending: Arc<AtomicBool>,
     settings: Settings,
     settings_open: Arc<AtomicBool>,
+    settings_loaded: Option<Settings>,
 }
 
 impl CaptureApp {
@@ -53,6 +54,7 @@ impl CaptureApp {
             screenshot_loading_pending: Arc::new(AtomicBool::new(false)),
             settings,
             settings_open: Arc::new(AtomicBool::new(false)),
+            settings_loaded: None,
         }
     }
 
@@ -171,8 +173,14 @@ impl eframe::App for CaptureApp {
         let txt = egui::Color32::from_rgb(215, 215, 225);
 
         if self.settings_open.load(Ordering::SeqCst) {
+            if self.settings_loaded.is_none() {
+                self.settings_loaded = Some(Settings::load());
+            }
             let settings_open = Arc::clone(&self.settings_open);
-            let local_settings = Arc::new(Mutex::new(Settings::load()));
+            let clear_cache = Arc::new(AtomicBool::new(false));
+            let clear_cache_clone = Arc::clone(&clear_cache);
+            let local_settings =
+                Arc::new(Mutex::new(self.settings_loaded.as_ref().unwrap().clone()));
             let local_settings_for_sync = Arc::clone(&local_settings);
 
             ctx.show_viewport_deferred(
@@ -232,6 +240,7 @@ impl eframe::App for CaptureApp {
                                             .clicked()
                                         {
                                             settings_open.store(false, Ordering::SeqCst);
+                                            clear_cache_clone.store(true, Ordering::SeqCst);
                                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                         }
                                     },
@@ -324,6 +333,7 @@ impl eframe::App for CaptureApp {
                                     .clicked()
                                 {
                                     settings_open.store(false, Ordering::SeqCst);
+                                    clear_cache_clone.store(true, Ordering::SeqCst);
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }
 
@@ -348,6 +358,7 @@ impl eframe::App for CaptureApp {
                                     }
                                     drop(s);
                                     settings_open.store(false, Ordering::SeqCst);
+                                    clear_cache_clone.store(true, Ordering::SeqCst);
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }
                             });
@@ -355,9 +366,14 @@ impl eframe::App for CaptureApp {
 
                     if ctx.input(|i| i.viewport().close_requested()) {
                         settings_open.store(false, Ordering::SeqCst);
+                        clear_cache_clone.store(true, Ordering::SeqCst);
                     }
                 },
             );
+
+            if clear_cache.load(Ordering::SeqCst) {
+                self.settings_loaded = None;
+            }
         }
 
         egui::CentralPanel::default()
