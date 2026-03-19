@@ -392,11 +392,12 @@ impl eframe::App for CaptureApp {
         }
 
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::default()
-                    .fill(bg)
-                    .inner_margin(egui::Margin::same(0)),
-            )
+            .frame(egui::Frame::default().fill(bg).inner_margin(egui::Margin {
+                left: 0,
+                right: 6,
+                top: 0,
+                bottom: 0,
+            }))
             .show(ctx, |ui| {
                 ui.set_min_height(44.0);
 
