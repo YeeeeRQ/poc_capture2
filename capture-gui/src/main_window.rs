@@ -13,11 +13,7 @@ pub fn show(
     txt: egui::Color32,
 ) {
     egui::CentralPanel::default()
-        .frame(
-            egui::Frame::default()
-                .fill(egui::Color32::TRANSPARENT)
-                .inner_margin(egui::Margin::same(8)),
-        )
+        .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
             let rect = ui.max_rect();
             ui.painter().rect(
