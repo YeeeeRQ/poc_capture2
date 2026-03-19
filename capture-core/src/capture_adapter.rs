@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crossbeam::channel;
 use parking_lot::Mutex;
 
 use windows_capture::{
@@ -15,8 +16,6 @@ use windows_capture::{
         MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
     },
 };
-
-use crate::encoder::FfmpegEncoder;
 
 #[derive(Debug, Clone)]
 pub struct RecordSettings {
@@ -47,10 +46,16 @@ pub struct CaptureSettings {
     pub preset: String,
     pub duration_secs: Option<u64>,
     pub target_fps: u32,
+    pub frame_tx: Option<channel::Sender<EncodedFrame>>,
+    pub done_tx: Option<std::sync::mpsc::Sender<()>>,
+}
+
+pub struct EncodedFrame {
+    pub data: Vec<u8>,
+    pub timestamp: Duration,
 }
 
 pub struct CaptureState {
-    pub encoder: Arc<Mutex<Option<FfmpegEncoder>>>,
     pub frame_buffer: Vec<u8>,
     pub rgba_buffer: Vec<u8>,
     pub start_time: Option<Instant>,
@@ -59,12 +64,14 @@ pub struct CaptureState {
     pub total_elapsed: Arc<Mutex<Duration>>,
     pub last_log_elapsed: Arc<Mutex<Duration>>,
     pub stop_requested: Arc<AtomicU64>,
+    pub last_sent_time: Arc<Mutex<Instant>>,
+    pub frame_tx: Option<channel::Sender<EncodedFrame>>,
+    pub done_tx: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Default for CaptureState {
     fn default() -> Self {
         Self {
-            encoder: Arc::new(Mutex::new(None)),
             frame_buffer: Vec::new(),
             rgba_buffer: Vec::new(),
             start_time: None,
@@ -73,6 +80,9 @@ impl Default for CaptureState {
             total_elapsed: Arc::new(Mutex::new(Duration::ZERO)),
             last_log_elapsed: Arc::new(Mutex::new(Duration::ZERO)),
             stop_requested: Arc::new(AtomicU64::new(0)),
+            last_sent_time: Arc::new(Mutex::new(Instant::now())),
+            frame_tx: None,
+            done_tx: None,
         }
     }
 }
@@ -84,14 +94,8 @@ pub struct CaptureHandler {
 
 impl CaptureHandler {
     pub fn setup(&mut self, settings: CaptureSettings) {
-        let enc = FfmpegEncoder::new(
-            settings.width,
-            settings.height,
-            &settings.output_path,
-            &settings.preset,
-        )
-        .expect("Failed to create encoder");
-        *self.state.encoder.lock() = Some(enc);
+        self.state.frame_tx = settings.frame_tx.clone();
+        self.state.done_tx = settings.done_tx.clone();
         self.settings = settings;
         self.state.start_time = Some(Instant::now());
         if let Some(dur) = self.settings.duration_secs {
@@ -121,6 +125,8 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 preset: "medium".to_string(),
                 duration_secs: None,
                 target_fps: 60,
+                frame_tx: None,
+                done_tx: None,
             },
             state: CaptureState::default(),
         })
@@ -131,17 +137,27 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         frame: &mut Frame,
         _control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
-        if self.state.stop_requested.load(Ordering::Relaxed) > 0 {
+        if self.state.stop_requested.load(Ordering::SeqCst) > 0 {
             return Ok(());
         }
 
-        if self.state.encoder.lock().is_none() {
+        if self.state.frame_tx.is_none() {
             return Ok(());
         }
 
         let width = self.settings.width as usize;
         let height = self.settings.height as usize;
         let frame_size = width * height * 4;
+
+        let interval = Duration::from_secs_f64(1.0 / self.settings.target_fps as f64);
+        let now = Instant::now();
+        {
+            let mut last = self.state.last_sent_time.lock();
+            if now.duration_since(*last) < interval {
+                return Ok(());
+            }
+            *last = now;
+        }
 
         if self.state.frame_buffer.len() < frame_size {
             self.state.frame_buffer.resize(frame_size, 0);
@@ -159,16 +175,26 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             &mut self.state.rgba_buffer[..frame_size],
         );
 
-        if let Some(ref mut enc) = *self.state.encoder.lock() {
-            enc.write_frame(&self.state.rgba_buffer[..frame_size])?;
-            self.state.frame_count.fetch_add(1, Ordering::Relaxed);
-        }
-
-        let total = self
+        let timestamp = self
             .state
             .start_time
             .map(|s| s.elapsed())
             .unwrap_or_default();
+
+        let frame = EncodedFrame {
+            data: self.state.rgba_buffer[..frame_size].to_vec(),
+            timestamp,
+        };
+
+        if let Some(ref tx) = self.state.frame_tx {
+            if tx.send(frame).is_err() {
+                log::warn!("Frame channel send failed (encoder thread died)");
+            } else {
+                self.state.frame_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let total = timestamp;
         *self.state.total_elapsed.lock() = total;
 
         let last_log = *self.state.last_log_elapsed.lock();
@@ -205,10 +231,11 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
 
 impl CaptureHandler {
     pub fn request_stop(&mut self) {
-        let prev = self.state.stop_requested.fetch_add(1, Ordering::Relaxed);
+        let prev = self.state.stop_requested.fetch_add(1, Ordering::SeqCst);
         if prev == 0 {
-            if let Some(ref mut enc) = *self.state.encoder.lock() {
-                enc.finish().ok();
+            drop(self.state.frame_tx.take());
+            if let Some(tx) = self.state.done_tx.take() {
+                let _ = tx.send(());
             }
             let fw = self.state.frame_count.load(Ordering::Relaxed);
             let total_time = self
@@ -310,6 +337,8 @@ pub fn build_capture_settings(
         preset: settings.preset.clone(),
         duration_secs: settings.duration_secs,
         target_fps: settings.target_fps,
+        frame_tx: None,
+        done_tx: None,
     }
 }
 

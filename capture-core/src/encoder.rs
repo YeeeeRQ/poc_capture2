@@ -12,6 +12,7 @@ pub struct FfmpegEncoder {
     height: u32,
     output_path: PathBuf,
     stdin: Option<ChildStdin>,
+    child: Option<std::process::Child>,
     raw_mode: bool,
     raw_file: Option<std::fs::File>,
     ffmpeg_path: Option<PathBuf>,
@@ -21,7 +22,13 @@ pub struct FfmpegEncoder {
 }
 
 impl FfmpegEncoder {
-    pub fn new(width: u32, height: u32, output_path: &Path, preset: &str) -> Result<Self> {
+    pub fn new(
+        width: u32,
+        height: u32,
+        output_path: &Path,
+        preset: &str,
+        target_fps: u32,
+    ) -> Result<Self> {
         let ffmpeg_path = Self::find_ffmpeg();
         let ffmpeg_exe = ffmpeg_path.as_ref().map(|p| p.as_os_str());
 
@@ -37,6 +44,7 @@ impl FfmpegEncoder {
                 height,
                 output_path: output_path.to_path_buf(),
                 stdin: None,
+                child: None,
                 raw_mode: true,
                 raw_file: Some(raw_file),
                 ffmpeg_path: None,
@@ -53,6 +61,8 @@ impl FfmpegEncoder {
             "-y",
             "-f",
             "rawvideo",
+            "-framerate",
+            &target_fps.to_string(),
             "-pix_fmt",
             "rgba",
             "-s",
@@ -69,6 +79,8 @@ impl FfmpegEncoder {
             "yuv420p",
             "-crf",
             "23",
+            "-r",
+            &target_fps.to_string(),
             output_path.to_str().unwrap_or("output.mp4"),
         ])
         .stdin(Stdio::piped())
@@ -101,6 +113,7 @@ impl FfmpegEncoder {
             height,
             output_path: output_path.to_path_buf(),
             stdin: Some(stdin),
+            child: Some(child),
             raw_mode: false,
             raw_file: None,
             ffmpeg_path,
@@ -199,6 +212,14 @@ impl FfmpegEncoder {
 
     pub fn finish(&mut self) -> Result<()> {
         self.stdin = None;
+
+        if let Some(ref mut child) = self.child {
+            if let Ok(status) = child.wait() {
+                log::info!("FFmpeg exited with status: {}", status);
+            } else {
+                log::warn!("FFmpeg did not exit cleanly");
+            }
+        }
 
         let fw = *self.frames_written.lock();
         let bw = *self.bytes_written.lock();
