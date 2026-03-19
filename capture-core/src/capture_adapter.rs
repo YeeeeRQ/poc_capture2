@@ -1,11 +1,11 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam::channel;
 use image::ImageEncoder;
-use parking_lot::{Condvar, Mutex};
+use parking_lot::Mutex;
 
 use windows_capture::{
     capture::{CaptureControl, Context as WinCtx, GraphicsCaptureApiHandler},
@@ -64,7 +64,6 @@ pub struct EncodedFrame {
 }
 
 pub struct CaptureState {
-    pub frame_buffer: Vec<u8>,
     pub rgba_buffer: Vec<u8>,
     pub start_time: Option<Instant>,
     pub duration: Option<Duration>,
@@ -75,18 +74,12 @@ pub struct CaptureState {
     pub last_sent_time: Arc<Mutex<Instant>>,
     pub frame_tx: Option<channel::Sender<EncodedFrame>>,
     pub done_tx: Option<std::sync::mpsc::Sender<()>>,
-    pub screenshot_request: Arc<Mutex<Option<ScreenshotRequest>>>,
-    pub screenshot_pixel_data: Arc<Mutex<Option<(ScreenshotRequest, Vec<u8>)>>>,
-    pub screenshot_done: Arc<Condvar>,
-    pub screenshot_done_flag: Arc<Mutex<bool>>,
-    pub screenshot_stopped: Arc<AtomicBool>,
-    pub screenshot_join_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
+    pub snapshot_buffer: Arc<Mutex<Vec<u8>>>,
 }
 
 impl Default for CaptureState {
     fn default() -> Self {
         Self {
-            frame_buffer: Vec::new(),
             rgba_buffer: Vec::new(),
             start_time: None,
             duration: None,
@@ -97,12 +90,7 @@ impl Default for CaptureState {
             last_sent_time: Arc::new(Mutex::new(Instant::now())),
             frame_tx: None,
             done_tx: None,
-            screenshot_request: Arc::new(Mutex::new(None)),
-            screenshot_pixel_data: Arc::new(Mutex::new(None)),
-            screenshot_done: Arc::new(Condvar::new()),
-            screenshot_done_flag: Arc::new(Mutex::new(false)),
-            screenshot_stopped: Arc::new(AtomicBool::new(false)),
-            screenshot_join_handle: Arc::new(Mutex::new(None)),
+            snapshot_buffer: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -121,49 +109,6 @@ impl CaptureHandler {
         if let Some(dur) = self.settings.duration_secs {
             self.state.duration = Some(Duration::from_secs(dur));
         }
-
-        if self.state.screenshot_join_handle.lock().is_none() {
-            let pixel_data = Arc::clone(&self.state.screenshot_pixel_data);
-            let done = Arc::clone(&self.state.screenshot_done);
-            let done_flag = Arc::clone(&self.state.screenshot_done_flag);
-            let stopped = Arc::clone(&self.state.screenshot_stopped);
-            let width = self.settings.width;
-            let height = self.settings.height;
-
-            let jh = std::thread::Builder::new()
-                .name("screenshot".to_string())
-                .spawn(move || loop {
-                    if stopped.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let mut guard = done_flag.lock();
-                    while !*guard {
-                        if stopped.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        done.wait(&mut guard);
-                    }
-                    *guard = false;
-                    drop(guard);
-
-                    let (req, pixels) = {
-                        let req_guard = pixel_data.lock();
-                        let req = req_guard.as_ref().map(|(r, p)| (r.clone(), p.clone()));
-                        drop(req_guard);
-                        match req {
-                            Some((r, p)) => (r, p),
-                            None => continue,
-                        }
-                    };
-
-                    if let Err(e) = encode_screenshot_to_file(&req, &pixels, width, height) {
-                        log::error!("Screenshot encoding failed: {}", e);
-                    }
-                })
-                .expect("Failed to spawn screenshot thread");
-            *self.state.screenshot_join_handle.lock() = Some(jh);
-        }
-
         log::info!(
             "Recording: {}x{} @ {} fps, output={}",
             self.settings.width,
@@ -174,16 +119,21 @@ impl CaptureHandler {
     }
 }
 
-fn encode_screenshot_to_file(
+pub fn encode_screenshot_to_file(
     req: &ScreenshotRequest,
     pixels: &[u8],
     width: u32,
     height: u32,
 ) -> anyhow::Result<()> {
+    let start = Instant::now();
+    log::info!("[Screenshot] encoding started, {} bytes", pixels.len());
     let file = std::fs::File::create(&req.path)?;
     let mut writer = std::io::BufWriter::new(file);
     let ext = req.format.to_lowercase();
-    if ext == "jpg" || ext == "jpeg" {
+    if ext == "bmp" {
+        let encoder = image::codecs::bmp::BmpEncoder::new(&mut writer);
+        encoder.write_image(pixels, width, height, image::ExtendedColorType::Rgba8)?;
+    } else if ext == "jpg" || ext == "jpeg" {
         let mut rgb_data = Vec::with_capacity((width as usize * height as usize) * 3);
         for chunk in pixels.chunks_exact(4) {
             rgb_data.push(chunk[0]);
@@ -196,7 +146,11 @@ fn encode_screenshot_to_file(
         let encoder = image::codecs::png::PngEncoder::new(&mut writer);
         encoder.write_image(pixels, width, height, image::ExtendedColorType::Rgba8)?;
     }
-    log::info!("Screenshot saved: {}", req.path.display());
+    log::info!(
+        "Screenshot saved: {} ({:.1}ms)",
+        req.path.display(),
+        start.elapsed().as_secs_f64() * 1000.0
+    );
     Ok(())
 }
 
@@ -248,8 +202,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             *last = now;
         }
 
-        if self.state.frame_buffer.len() < frame_size {
-            self.state.frame_buffer.resize(frame_size, 0);
+        if self.state.rgba_buffer.len() < frame_size {
             self.state.rgba_buffer.resize(frame_size, 0);
         }
 
@@ -257,12 +210,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let bgra = fb.as_nopadding_buffer()?;
         let copy_len = bgra.len().min(frame_size);
 
-        self.state.frame_buffer[..copy_len].copy_from_slice(&bgra[..copy_len]);
-
-        bgra_to_rgba_inplace(
-            &self.state.frame_buffer[..frame_size],
-            &mut self.state.rgba_buffer[..frame_size],
-        );
+        bgra_to_rgba_inplace(&bgra[..copy_len], &mut self.state.rgba_buffer[..frame_size]);
 
         let timestamp = self
             .state
@@ -309,12 +257,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             }
         }
 
-        let pending = { self.state.screenshot_request.lock().take() };
-        if let Some(req) = pending {
-            let pixels = self.state.rgba_buffer[..frame_size].to_vec();
-            *self.state.screenshot_pixel_data.lock() = Some((req, pixels));
-            *self.state.screenshot_done_flag.lock() = true;
-            self.state.screenshot_done.notify_one();
+        {
+            let mut snap = self.state.snapshot_buffer.lock();
+            *snap = self.state.rgba_buffer[..frame_size].to_vec();
         }
 
         Ok(())
@@ -333,11 +278,6 @@ impl CaptureHandler {
             drop(self.state.frame_tx.take());
             if let Some(tx) = self.state.done_tx.take() {
                 let _ = tx.send(());
-            }
-            self.state.screenshot_stopped.store(true, Ordering::Relaxed);
-            self.state.screenshot_done.notify_one();
-            if let Some(jh) = self.state.screenshot_join_handle.lock().take() {
-                let _ = jh.join();
             }
             let fw = self.state.frame_count.load(Ordering::Relaxed);
             let total_time = self
@@ -364,19 +304,6 @@ impl CaptureHandler {
                 output_size
             );
         }
-    }
-
-    pub fn take_screenshot(&mut self, request: ScreenshotRequest) {
-        *self.state.screenshot_request.lock() = Some(request);
-        loop {
-            let guard = self.state.screenshot_done_flag.lock();
-            if *guard {
-                break;
-            }
-            drop(guard);
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        *self.state.screenshot_done_flag.lock() = false;
     }
 }
 

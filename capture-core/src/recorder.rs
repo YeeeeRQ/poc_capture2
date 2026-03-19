@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -5,10 +6,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use crossbeam::channel;
 use parking_lot::{Condvar, Mutex};
+use std::sync::atomic::AtomicBool;
 
 use super::capture_adapter::{
-    build_capture_settings, get_monitor, setup_dpi_awareness, EncodedFrame, RecordSettings,
-    ScreenshotRequest,
+    build_capture_settings, encode_screenshot_to_file, get_monitor, setup_dpi_awareness,
+    EncodedFrame, RecordSettings, ScreenshotRequest,
 };
 use windows_capture::capture::CaptureControl;
 
@@ -20,12 +22,16 @@ pub struct RecorderHandle {
         super::capture_adapter::CaptureHandler,
         Box<dyn std::error::Error + Send + Sync>,
     >,
+    screenshot_request: Arc<Mutex<Option<ScreenshotRequest>>>,
+    screenshot_done: Arc<Condvar>,
+    screenshot_stopped: Arc<AtomicBool>,
+    screenshot_join_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl RecorderHandle {
     pub fn start(
         settings: RecordSettings,
-    ) -> Result<(Self, std::thread::JoinHandle<Result<std::path::PathBuf>>)> {
+    ) -> Result<(Self, std::thread::JoinHandle<Result<PathBuf>>)> {
         setup_dpi_awareness();
 
         let monitor = get_monitor(settings.monitor_index).map_err(|e| {
@@ -55,6 +61,11 @@ impl RecorderHandle {
         let stop_flag: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
         let done_flag: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
         let done_condvar = Arc::new(Condvar::new());
+        let screenshot_request: Arc<Mutex<Option<ScreenshotRequest>>> = Arc::new(Mutex::new(None));
+        let screenshot_done: Arc<Condvar> = Arc::new(Condvar::new());
+        let screenshot_stopped: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+        let screenshot_join_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> =
+            Arc::new(Mutex::new(None));
 
         let encoder_join = {
             let stop_flag = Arc::clone(&stop_flag);
@@ -123,13 +134,59 @@ impl RecorderHandle {
         };
 
         let callback = control.callback();
-        {
+        let snapshot_buffer = {
             let mut handler = callback.lock();
             let mut setup_settings = build_capture_settings(width, height, &settings);
             setup_settings.frame_tx = Some(frame_tx);
             setup_settings.done_tx = Some(done_tx_for_setup);
             handler.setup(setup_settings);
-        }
+            Arc::clone(&handler.state.snapshot_buffer)
+        };
+
+        let screenshot_request_clone = Arc::clone(&screenshot_request);
+        let screenshot_stopped_clone = Arc::clone(&screenshot_stopped);
+        let snapshot_clone = Arc::clone(&snapshot_buffer);
+
+        let jh = std::thread::Builder::new()
+            .name("screenshot".to_string())
+            .spawn(move || loop {
+                if screenshot_stopped_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let req = {
+                    let mut guard = screenshot_request_clone.lock();
+                    guard.take()
+                };
+
+                match req {
+                    Some(req) => {
+                        let pixels = {
+                            let snap = snapshot_clone.lock();
+                            snap.clone()
+                        };
+
+                        if pixels.is_empty() {
+                            log::warn!("[Screenshot] snapshot buffer empty, dropping");
+                            continue;
+                        }
+
+                        let start = Instant::now();
+                        if let Err(e) = encode_screenshot_to_file(&req, &pixels, width, height) {
+                            log::error!("Screenshot encoding failed: {}", e);
+                        }
+                        log::info!(
+                            "[Screenshot] done, encoding {:.1}ms",
+                            start.elapsed().as_secs_f64() * 1000.0
+                        );
+                    }
+                    None => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            })
+            .expect("Failed to spawn screenshot thread");
+        *screenshot_join_handle.lock() = Some(jh);
 
         log::info!(
             "Recording monitor [{}] {}x{} @ {} fps...",
@@ -143,6 +200,9 @@ impl RecorderHandle {
         let done_flag_clone = Arc::clone(&done_flag);
         let done_condvar_clone = Arc::clone(&done_condvar);
         let halt_handle = control.halt_handle();
+        let ss_stopped = Arc::clone(&screenshot_stopped);
+        let ss_done = Arc::clone(&screenshot_done);
+        let ss_jh = Arc::clone(&screenshot_join_handle);
 
         let join_handle = std::thread::spawn(move || {
             loop {
@@ -158,6 +218,12 @@ impl RecorderHandle {
                 std::thread::sleep(Duration::from_millis(50));
             }
 
+            ss_stopped.store(true, Ordering::Relaxed);
+            ss_done.notify_one();
+            if let Some(jh) = ss_jh.lock().take() {
+                let _ = jh.join();
+            }
+
             let _ = encoder_join.join();
             *done_flag_clone.lock() = true;
             done_condvar_clone.notify_one();
@@ -170,6 +236,10 @@ impl RecorderHandle {
                 done_flag,
                 done_condvar,
                 control,
+                screenshot_request,
+                screenshot_done,
+                screenshot_stopped,
+                screenshot_join_handle,
             },
             join_handle,
         ))
@@ -190,9 +260,11 @@ impl RecorderHandle {
     }
 
     pub fn take_screenshot(&self, request: ScreenshotRequest) {
-        let callback = self.control.callback();
-        let mut handler = callback.lock();
-        handler.take_screenshot(request);
+        {
+            let mut guard = self.screenshot_request.lock();
+            *guard = Some(request);
+        }
+        self.screenshot_done.notify_one();
     }
 }
 

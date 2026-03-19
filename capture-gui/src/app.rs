@@ -55,12 +55,12 @@ impl CaptureApp {
         let path = std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(format!(
-                "screenshot_{}.png",
+                "screenshot_{}.bmp",
                 Local::now().format("%Y%m%d_%H%M%S")
             ));
         let request = ScreenshotRequest {
             path,
-            format: "png".to_string(),
+            format: "bmp".to_string(),
             quality: 90,
         };
         if self.is_recording {
@@ -71,7 +71,7 @@ impl CaptureApp {
             match take_screenshot(&ScreenshotSettings {
                 monitor_index: self.selected_monitor,
                 output_path: None,
-                format: "png".to_string(),
+                format: "bmp".to_string(),
                 quality: 90,
             }) {
                 Ok(p) => log::info!("Screenshot saved: {}", p.display()),

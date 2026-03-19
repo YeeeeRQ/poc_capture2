@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -122,6 +123,7 @@ impl GraphicsCaptureApiHandler for ScreenshotHandler {
 }
 
 pub fn take_screenshot(settings: &ScreenshotSettings) -> Result<PathBuf> {
+    let start = Instant::now();
     let monitors = Monitor::enumerate().context("Failed to enumerate monitors")?;
 
     if settings.monitor_index >= monitors.len() {
@@ -162,12 +164,17 @@ pub fn take_screenshot(settings: &ScreenshotSettings) -> Result<PathBuf> {
     let control = ScreenshotHandler::start_free_threaded(screenshot_settings)
         .map_err(|e| anyhow::anyhow!("Failed to start screenshot capture: {}", e))?;
 
+    let wait_start = Instant::now();
     {
         let mut guard = done_flag.lock();
         while !*guard {
             done.wait(&mut guard);
         }
     }
+    log::info!(
+        "[Screenshot] waited {:.1}ms for frame",
+        wait_start.elapsed().as_secs_f64() * 1000.0
+    );
 
     let _ = control.stop();
 
@@ -178,32 +185,45 @@ pub fn take_screenshot(settings: &ScreenshotSettings) -> Result<PathBuf> {
         .context("Screenshot failed")?;
 
     let output_path = resolve_screenshot_path(settings)?;
-
-    let file = std::fs::File::create(&output_path)?;
-    let mut writer = std::io::BufWriter::new(file);
+    let encode_start = Instant::now();
 
     let ext = settings.format.to_lowercase();
-    if ext == "jpg" || ext == "jpeg" {
+    if ext == "bmp" {
+        let file = std::fs::File::create(&output_path)?;
+        let mut writer = std::io::BufWriter::new(file);
+        let encoder = image::codecs::bmp::BmpEncoder::new(&mut writer);
+        encoder
+            .write_image(&pixels, width, height, image::ExtendedColorType::Rgba8)
+            .context("Failed to write BMP")?;
+    } else if ext == "jpg" || ext == "jpeg" {
         let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
         for chunk in pixels.chunks_exact(4) {
             rgb_data.push(chunk[0]);
             rgb_data.push(chunk[1]);
             rgb_data.push(chunk[2]);
         }
-
+        let file = std::fs::File::create(&output_path)?;
+        let mut writer = std::io::BufWriter::new(file);
         let encoder =
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, settings.quality);
         encoder
             .write_image(&rgb_data, width, height, image::ExtendedColorType::Rgb8)
             .context("Failed to write JPEG")?;
     } else {
+        let file = std::fs::File::create(&output_path)?;
+        let mut writer = std::io::BufWriter::new(file);
         let encoder = image::codecs::png::PngEncoder::new(&mut writer);
         encoder
             .write_image(&pixels, width, height, image::ExtendedColorType::Rgba8)
             .context("Failed to write PNG")?;
     }
 
-    log::info!("Screenshot saved: {}", output_path.display());
+    log::info!(
+        "Screenshot saved: {} (encode {:.1}ms, total {:.1}ms)",
+        output_path.display(),
+        encode_start.elapsed().as_secs_f64() * 1000.0,
+        start.elapsed().as_secs_f64() * 1000.0
+    );
     Ok(output_path)
 }
 
