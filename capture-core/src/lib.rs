@@ -1,7 +1,10 @@
+pub mod capture_adapter;
 pub mod encoder;
 pub mod recorder;
 pub mod screenshot;
 
+pub use capture_adapter::enumerate_monitors;
+pub use capture_adapter::RecordSettings;
 pub use encoder::FfmpegEncoder;
-pub use recorder::{start_recording, RecordSettings, RecorderHandle, RecorderState};
+pub use recorder::RecorderHandle;
 pub use screenshot::{list_monitors, take_screenshot, MonitorInfo, ScreenshotSettings};

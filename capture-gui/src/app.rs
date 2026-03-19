@@ -13,9 +13,9 @@ use capture_core::{
 pub struct CaptureApp {
     monitors: Vec<(usize, u32, u32)>,
     selected_monitor: usize,
+    target_fps: u32,
     is_recording: bool,
     record_start: Option<Instant>,
-    fps: u32,
     is_pinned: bool,
     handle: Mutex<Option<RecorderHandle>>,
     join_handle:
@@ -36,9 +36,9 @@ impl CaptureApp {
         Self {
             monitors,
             selected_monitor: 0,
+            target_fps: 60,
             is_recording: false,
             record_start: None,
-            fps: 30,
             is_pinned: true,
             handle: Mutex::new(None),
             join_handle: Mutex::new(None),
@@ -85,8 +85,8 @@ impl CaptureApp {
         let settings = RecordSettings {
             monitor_index: self.selected_monitor,
             output_path: None,
-            fps: self.fps,
             duration_secs: None,
+            target_fps: self.target_fps,
             preset: "medium".to_string(),
         };
 
@@ -206,12 +206,11 @@ impl eframe::App for CaptureApp {
                                 .strong(),
                         );
                     } else {
-                        ui.add_sized(
-                            [88.0, 24.0],
-                            egui::DragValue::new(&mut self.fps)
+                        ui.add(
+                            egui::DragValue::new(&mut self.target_fps)
                                 .range(1..=120)
-                                .speed(1.0)
-                                .suffix(" fps"),
+                                .suffix(" fps")
+                                .speed(1.0),
                         );
                     }
 

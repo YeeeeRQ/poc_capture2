@@ -1,29 +1,31 @@
 use anyhow::{Context, Result};
+use parking_lot::Mutex;
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
+use std::sync::Arc;
+use std::time::Instant;
 
 pub struct FfmpegEncoder {
     width: u32,
     height: u32,
-    fps: u32,
     output_path: PathBuf,
     stdin: Option<ChildStdin>,
     raw_mode: bool,
     raw_file: Option<std::fs::File>,
     ffmpeg_path: Option<PathBuf>,
+    frames_written: Arc<Mutex<u64>>,
+    bytes_written: Arc<Mutex<u64>>,
+    stderr_path: PathBuf,
 }
 
 impl FfmpegEncoder {
-    pub fn new(
-        width: u32,
-        height: u32,
-        fps: u32,
-        output_path: &Path,
-        preset: &str,
-    ) -> Result<Self> {
+    pub fn new(width: u32, height: u32, output_path: &Path, preset: &str) -> Result<Self> {
         let ffmpeg_path = Self::find_ffmpeg();
         let ffmpeg_exe = ffmpeg_path.as_ref().map(|p| p.as_os_str());
+
+        let stderr_path = std::env::temp_dir().join("capture_ffmpeg_stderr.log");
 
         if ffmpeg_exe.is_none() {
             log::warn!("FFmpeg not found. Using raw RGBA fallback mode.");
@@ -33,12 +35,14 @@ impl FfmpegEncoder {
             return Ok(Self {
                 width,
                 height,
-                fps,
                 output_path: output_path.to_path_buf(),
                 stdin: None,
                 raw_mode: true,
                 raw_file: Some(raw_file),
                 ffmpeg_path: None,
+                frames_written: Arc::new(Mutex::new(0)),
+                bytes_written: Arc::new(Mutex::new(0)),
+                stderr_path,
             });
         }
 
@@ -53,8 +57,8 @@ impl FfmpegEncoder {
             "rgba",
             "-s",
             &format!("{}x{}", width, height),
-            "-framerate",
-            &fps.to_string(),
+            "-use_wallclock_as_timestamps",
+            "1",
             "-i",
             "pipe:0",
             "-c:v",
@@ -69,22 +73,40 @@ impl FfmpegEncoder {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().context("Failed to spawn FFmpeg")?;
+
+        let stderr_path_clone = stderr_path.clone();
+        if let Some(mut cs) = child.stderr.take() {
+            std::thread::spawn(move || {
+                if let Ok(mut sf) = fs::File::create(&stderr_path_clone) {
+                    std::io::copy(&mut cs, &mut sf).ok();
+                }
+            });
+        }
+
         let stdin = child.stdin.take().context("Failed to take FFmpeg stdin")?;
 
-        log::info!("FFmpeg started: {}", output_path.display());
+        log::info!(
+            "FFmpeg started: {} ({}x{}, preset={})",
+            output_path.display(),
+            width,
+            height,
+            preset
+        );
 
         Ok(Self {
             width,
             height,
-            fps,
             output_path: output_path.to_path_buf(),
             stdin: Some(stdin),
             raw_mode: false,
             raw_file: None,
             ffmpeg_path,
+            frames_written: Arc::new(Mutex::new(0)),
+            bytes_written: Arc::new(Mutex::new(0)),
+            stderr_path,
         })
     }
 
@@ -135,20 +157,70 @@ impl FfmpegEncoder {
             if let Some(ref mut f) = self.raw_file {
                 f.write_all(rgba_data)
                     .context("Failed to write raw frame")?;
+                *self.frames_written.lock() += 1;
+                *self.bytes_written.lock() += rgba_data.len() as u64;
             }
             return Ok(());
         }
 
         if let Some(ref mut stdin) = self.stdin {
+            let write_start = Instant::now();
             stdin
                 .write_all(rgba_data)
                 .context("Failed to write frame to FFmpeg stdin")?;
+            let write_elapsed = write_start.elapsed();
+            *self.frames_written.lock() += 1;
+            *self.bytes_written.lock() += rgba_data.len() as u64;
+
+            if write_elapsed.as_millis() > 50 {
+                let fw = *self.frames_written.lock();
+                log::warn!(
+                    "Slow stdin write: {:.1}ms for frame {} ({} bytes)",
+                    write_elapsed.as_secs_f64() * 1000.0,
+                    fw,
+                    rgba_data.len()
+                );
+            }
         }
         Ok(())
     }
 
+    pub fn frames_written(&self) -> u64 {
+        *self.frames_written.lock()
+    }
+
+    pub fn bytes_written(&self) -> u64 {
+        *self.bytes_written.lock()
+    }
+
+    pub fn frame_size(&self) -> u64 {
+        self.width as u64 * self.height as u64 * 4
+    }
+
     pub fn finish(&mut self) -> Result<()> {
         self.stdin = None;
+
+        let fw = *self.frames_written.lock();
+        let bw = *self.bytes_written.lock();
+        let expected = self.frame_size() * fw;
+
+        log::info!(
+            "Encoder finish: frames_written={}, bytes_written={}, expected={}, match={}",
+            fw,
+            bw,
+            expected,
+            bw == expected
+        );
+
+        if self.stderr_path.exists() {
+            if let Ok(content) = fs::read_to_string(&self.stderr_path) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    log::info!("FFmpeg stderr:\n{}", trimmed);
+                }
+            }
+            let _ = fs::remove_file(&self.stderr_path);
+        }
 
         if self.raw_mode {
             if let Some(raw_path) = self.raw_file.take().and_then(|_| {
@@ -167,8 +239,6 @@ impl FfmpegEncoder {
                 let status = Command::new(ffmpeg)
                     .args([
                         "-y",
-                        "-framerate",
-                        &self.fps.to_string(),
                         "-f",
                         "rawvideo",
                         "-pix_fmt",
@@ -190,7 +260,7 @@ impl FfmpegEncoder {
                     .status();
 
                 if status.map(|s| s.success()).unwrap_or(false) {
-                    let _ = std::fs::remove_file(&raw_path);
+                    let _ = fs::remove_file(&raw_path);
                     log::info!("Encoding complete: {}", self.output_path.display());
                 }
             }

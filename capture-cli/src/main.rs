@@ -48,10 +48,10 @@ struct RecordArgs {
     monitor: usize,
     #[arg(short, long)]
     output: Option<String>,
-    #[arg(short = 'f', long, default_value = "30")]
-    fps: u32,
     #[arg(long)]
     duration: Option<u64>,
+    #[arg(long, default_value = "60")]
+    fps: u32,
     #[arg(long, default_value = "medium", value_parser = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"])]
     preset: String,
 }
@@ -96,14 +96,14 @@ fn main() -> Result<()> {
             let settings = RecordSettings {
                 monitor_index: args.monitor,
                 output_path: args.output.map(PathBuf::from),
-                fps: args.fps,
                 duration_secs: args.duration,
+                target_fps: args.fps,
                 preset: args.preset,
             };
 
             println!(
-                "Recording monitor [{}] {}x{} @ {} fps...",
-                args.monitor, monitors[args.monitor].width, monitors[args.monitor].height, args.fps
+                "Recording monitor [{}] {}x{}...",
+                args.monitor, monitors[args.monitor].width, monitors[args.monitor].height
             );
 
             let output = start_recording_cli(settings)?;
