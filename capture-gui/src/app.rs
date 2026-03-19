@@ -16,6 +16,7 @@ pub struct CaptureApp {
     is_recording: bool,
     record_start: Option<Instant>,
     fps: u32,
+    is_pinned: bool,
     handle: Mutex<Option<RecorderHandle>>,
     join_handle:
         Mutex<Option<std::thread::JoinHandle<std::result::Result<PathBuf, anyhow::Error>>>>,
@@ -38,6 +39,7 @@ impl CaptureApp {
             is_recording: false,
             record_start: None,
             fps: 30,
+            is_pinned: true,
             handle: Mutex::new(None),
             join_handle: Mutex::new(None),
             quit_flag,
@@ -155,6 +157,17 @@ impl eframe::App for CaptureApp {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     ui.add_space(10.0);
 
+                    let drag_rect = egui::Rect::from_min_size(
+                        ui.min_rect().min,
+                        egui::vec2(ui.available_width(), 10.0),
+                    );
+                    if ui
+                        .interact(drag_rect, egui::Id::new("drag"), egui::Sense::click())
+                        .is_pointer_button_down_on()
+                    {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+
                     ui.label(
                         egui::RichText::new(if self.is_recording { "⏺" } else { "📷" })
                             .color(if self.is_recording {
@@ -184,6 +197,23 @@ impl eframe::App for CaptureApp {
                                 );
                             }
                         });
+
+                    if self.is_recording {
+                        ui.label(
+                            egui::RichText::new(self.timer_text())
+                                .color(egui::Color32::WHITE)
+                                .size(14.0)
+                                .strong(),
+                        );
+                    } else {
+                        ui.add_sized(
+                            [88.0, 24.0],
+                            egui::DragValue::new(&mut self.fps)
+                                .range(1..=120)
+                                .speed(1.0)
+                                .suffix(" fps"),
+                        );
+                    }
 
                     if ui
                         .add_sized(
@@ -223,21 +253,37 @@ impl eframe::App for CaptureApp {
                         self.toggle_recording();
                     }
 
-                    if self.is_recording {
-                        ui.label(
-                            egui::RichText::new(self.timer_text())
-                                .color(egui::Color32::WHITE)
-                                .size(14.0)
-                                .strong(),
-                        );
+                    let pin_bg = if self.is_pinned {
+                        egui::Color32::from_rgb(60, 150, 255)
                     } else {
-                        ui.add_sized(
-                            [88.0, 24.0],
-                            egui::DragValue::new(&mut self.fps)
-                                .range(1..=120)
-                                .speed(1.0)
-                                .suffix(" fps"),
-                        );
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)
+                    };
+                    let pin_txt = if self.is_pinned {
+                        egui::Color32::from_rgb(15, 30, 60)
+                    } else {
+                        txt
+                    };
+
+                    if ui
+                        .add_sized(
+                            [28.0, 28.0],
+                            egui::Button::new(
+                                egui::RichText::new(if self.is_pinned { "📌" } else { "📍" })
+                                    .size(14.0)
+                                    .color(pin_txt),
+                            )
+                            .fill(pin_bg),
+                        )
+                        .clicked()
+                    {
+                        self.is_pinned = !self.is_pinned;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                            if self.is_pinned {
+                                egui::WindowLevel::AlwaysOnTop
+                            } else {
+                                egui::WindowLevel::Normal
+                            },
+                        ));
                     }
 
                     if ui
