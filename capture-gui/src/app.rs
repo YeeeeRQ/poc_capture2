@@ -172,7 +172,7 @@ impl eframe::App for CaptureApp {
 
         if self.settings_open.load(Ordering::SeqCst) {
             let settings_open = Arc::clone(&self.settings_open);
-            let local_settings = Arc::new(Mutex::new(self.settings.clone()));
+            let local_settings = Arc::new(Mutex::new(Settings::load()));
             let local_settings_for_sync = Arc::clone(&local_settings);
 
             ctx.show_viewport_deferred(
@@ -358,14 +358,6 @@ impl eframe::App for CaptureApp {
                     }
                 },
             );
-
-            let saved = local_settings.lock();
-            if saved.fps != self.settings.fps
-                || saved.screenshot_format != self.settings.screenshot_format
-                || saved.screenshot_quality != self.settings.screenshot_quality
-            {
-                self.settings = saved.clone();
-            }
         }
 
         egui::CentralPanel::default()
