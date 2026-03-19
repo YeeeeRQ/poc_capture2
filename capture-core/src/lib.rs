@@ -8,4 +8,7 @@ pub use capture_adapter::RecordSettings;
 pub use capture_adapter::ScreenshotRequest;
 pub use encoder::FfmpegEncoder;
 pub use recorder::RecorderHandle;
-pub use screenshot::{list_monitors, take_screenshot, MonitorInfo, ScreenshotSettings};
+pub use screenshot::{
+    get_primary_monitor_rect, list_monitors, take_screenshot, MonitorInfo, MonitorRect,
+    ScreenshotSettings,
+};

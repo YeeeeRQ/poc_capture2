@@ -775,6 +775,7 @@ dependencies = [
  "image",
  "log",
  "parking_lot",
+ "windows 0.61.3",
  "windows-capture",
 ]
 

@@ -36,6 +36,7 @@ pub struct CaptureApp {
     settings_open: Arc<AtomicBool>,
     settings_loaded: Option<Settings>,
     settings_was_open: bool,
+    main_viewport_rect: Option<egui::Rect>,
 }
 
 impl CaptureApp {
@@ -57,6 +58,7 @@ impl CaptureApp {
             settings_open: Arc::new(AtomicBool::new(false)),
             settings_loaded: None,
             settings_was_open: false,
+            main_viewport_rect: None,
         }
     }
 
@@ -166,6 +168,10 @@ impl eframe::App for CaptureApp {
             return;
         }
 
+        if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+            self.main_viewport_rect = Some(rect);
+        }
+
         let bg = if self.is_recording {
             egui::Color32::from_rgb(180, 20, 20)
         } else {
@@ -188,11 +194,23 @@ impl eframe::App for CaptureApp {
                 Arc::new(Mutex::new(self.settings_loaded.as_ref().unwrap().clone()));
             let local_settings_for_sync = Arc::clone(&local_settings);
 
+            let settings_h = 300.0_f32;
+            let settings_w = 260.0_f32;
+            let gap = 10.0_f32;
+
+            let settings_pos = if let Some(rect) = self.main_viewport_rect {
+                let center_x = rect.center().x;
+                egui::Pos2::new(center_x - settings_w / 2.0, rect.min.y - settings_h - gap)
+            } else {
+                egui::Pos2::new(100.0, 100.0)
+            };
+
             ctx.show_viewport_deferred(
                 *SETTINGS_VIEWPORT_ID,
                 egui::ViewportBuilder::default()
                     .with_title("设置")
-                    .with_inner_size([260.0, 300.0])
+                    .with_inner_size([settings_w, settings_h])
+                    .with_position(settings_pos)
                     .with_decorations(false)
                     .with_resizable(false),
                 move |ctx, _class| {

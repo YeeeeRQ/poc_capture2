@@ -7,6 +7,9 @@ use image::ImageEncoder;
 use parking_lot::{Condvar, Mutex};
 use std::path::PathBuf;
 
+use windows::Win32::Foundation::POINT;
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFOEXW, MONITOR_DEFAULTTOPRIMARY};
+
 use windows_capture::{
     capture::GraphicsCaptureApiHandler,
     frame::Frame,
@@ -26,6 +29,40 @@ pub struct MonitorInfo {
     pub height: u32,
     pub x: i32,
     pub y: i32,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MonitorRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+pub fn get_primary_monitor_rect() -> Result<MonitorRect> {
+    unsafe {
+        let hmonitor = windows::Win32::Graphics::Gdi::MonitorFromPoint(
+            POINT { x: 0, y: 0 },
+            MONITOR_DEFAULTTOPRIMARY,
+        );
+
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+
+        let ok = GetMonitorInfoW(hmonitor, &mut info as *mut _ as *mut _);
+        if ok.as_bool() {
+            let left = info.monitorInfo.rcMonitor.left;
+            let top = info.monitorInfo.rcMonitor.top;
+            Ok(MonitorRect {
+                x: left,
+                y: top,
+                width: (info.monitorInfo.rcMonitor.right - left) as u32,
+                height: (info.monitorInfo.rcMonitor.bottom - top) as u32,
+            })
+        } else {
+            anyhow::bail!("GetMonitorInfoW failed")
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

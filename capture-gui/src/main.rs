@@ -23,15 +23,27 @@ fn main() -> Result<()> {
 
     let app_settings = Settings::load();
 
+    let primary = capture_core::get_primary_monitor_rect()
+        .map(|r| (r.x, r.y, r.width, r.height))
+        .unwrap_or((0, 0, 1920, 1080));
+
+    let main_w = 440.0_f32;
+    let main_h = 48.0_f32;
+    let margin = 40.0_f32;
+
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_decorations(false)
             .with_transparent(false)
-            .with_inner_size([440.0, 48.0])
+            .with_inner_size([main_w, main_h])
             .with_min_inner_size([400.0, 44.0])
             .with_resizable(true)
             .with_always_on_top()
-            .with_titlebar_shown(false),
+            .with_titlebar_shown(false)
+            .with_position(egui::Pos2::new(
+                (primary.2 as f32 - main_w) / 2.0,
+                primary.3 as f32 - main_h - margin,
+            )),
         ..Default::default()
     };
 
