@@ -13,18 +13,26 @@ pub fn show(
     txt: egui::Color32,
 ) {
     egui::CentralPanel::default()
-        .frame(egui::Frame::default().fill(bg).inner_margin(egui::Margin {
-            left: 0,
-            right: 6,
-            top: 0,
-            bottom: 0,
-        }))
+        .frame(
+            egui::Frame::default()
+                .fill(egui::Color32::TRANSPARENT)
+                .inner_margin(egui::Margin::same(8)),
+        )
         .show(ctx, |ui| {
-            let avail_h = ui.available_height();
-            let toolbar_h = 44.0_f32;
-            let top_space = ((avail_h - toolbar_h) / 2.0).max(0.0);
+            let rect = ui.max_rect();
+            ui.painter().rect(
+                rect.expand(1.0),
+                8.0,
+                bg,
+                egui::Stroke::new(0.0, egui::Color32::TRANSPARENT),
+                egui::StrokeKind::Inside,
+            );
 
-            ui.allocate_ui(egui::vec2(ui.available_width(), avail_h), |ui| {
+            ui.allocate_ui(rect.size(), |ui| {
+                let avail_h = ui.available_height();
+                let toolbar_h = 44.0_f32;
+                let top_space = ((avail_h - toolbar_h) / 2.0).max(0.0);
+
                 ui.add_space(top_space);
                 ui.set_min_height(toolbar_h);
 
