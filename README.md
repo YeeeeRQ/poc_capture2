@@ -6,10 +6,11 @@ Windows 10/11 屏幕截图 + 录屏工具，提供 CLI 和 GUI 两种界面。
 
 ```
 capture-core/              # 共享核心库（screenshot + recorder + encoder）
-capture-cli/               # CLI 二进制
-capture-gui/              # GUI 二进制（egui frameless 工具条）
-bin/                      # FFmpeg 静态二进制（自行添加，gitignore）
-src_old/                  # 废弃的旧实现（参考用）
+capture-gui/              # GUI 二进制（egui frameless 工具条，含嵌入字体）
+capture-gui/fonts/        # 嵌入字体（Noto Sans SC + Noto Color Emoji）
+capture-cli/              # CLI 二进制
+bin/                     # FFmpeg 静态二进制（自行添加，gitignore）
+src_old/                 # 废弃的旧实现（参考用）
 ```
 
 ## 快速开始
@@ -78,7 +79,7 @@ GUI 是一个无边框浮动工具条，包含：
 ## 二进制分发
 
 ```
-capture-gui.exe    # GUI 版本（~7MB）
+capture-gui.exe    # GUI 版本（~42MB，含嵌入字体）
 capture-cli.exe    # CLI 版本（~1.2MB）
 ffmpeg.exe         # FFmpeg 静态编译版
 ffprobe.exe
