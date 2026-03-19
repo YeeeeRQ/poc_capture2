@@ -302,7 +302,9 @@ impl eframe::App for CaptureApp {
                         )
                         .clicked()
                     {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                        self.quit_flag.store(true, Ordering::SeqCst);
+                        self.stop_recording();
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
 
                     ui.add_space(10.0);
