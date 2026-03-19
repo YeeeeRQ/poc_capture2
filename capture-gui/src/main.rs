@@ -8,7 +8,9 @@ use eframe::egui;
 use eframe::run_native;
 
 mod app;
+mod main_window;
 mod settings;
+mod settings_window;
 
 use crate::app::CaptureApp;
 use settings::Settings;

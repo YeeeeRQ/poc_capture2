@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 const SETTINGS_FILE: &str = "settings.toml";
 
+pub const FORMAT_OPTIONS: &[&str] = &["jpg", "png", "bmp"];
+pub const QUALITY_OPTIONS: &[u8] = &[20, 40, 60, 80, 100];
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     pub fps: u32,
@@ -32,18 +35,12 @@ impl Settings {
     pub fn load() -> Self {
         let path = Self::path();
         if path.exists() {
-            match std::fs::read_to_string(&path) {
-                Ok(content) => match toml::from_str(&content) {
-                    Ok(s) => {
-                        log::info!("Settings loaded from {}", path.display());
-                        return s;
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to parse settings: {}, using defaults", e);
-                    }
-                },
-                Err(e) => {
-                    log::warn!("Failed to read settings: {}, using defaults", e);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Ok(s) = toml::from_str::<Settings>(&content) {
+                    log::info!("Settings loaded from {}", path.display());
+                    return s;
+                } else {
+                    log::warn!("Failed to parse settings, using defaults");
                 }
             }
         }
