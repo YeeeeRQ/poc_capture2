@@ -11,6 +11,8 @@ mod app;
 mod main_window;
 mod settings;
 mod settings_window;
+#[cfg(windows)]
+mod windows_window;
 
 use crate::app::CaptureApp;
 use settings::Settings;

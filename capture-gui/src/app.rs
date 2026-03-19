@@ -33,6 +33,7 @@ pub struct CaptureApp {
     settings_loaded: Option<Settings>,
     settings_was_open: bool,
     pub main_viewport_rect: Option<egui::Rect>,
+    window_rounded: bool,
 }
 
 impl CaptureApp {
@@ -55,6 +56,7 @@ impl CaptureApp {
             settings_loaded: None,
             settings_was_open: false,
             main_viewport_rect: None,
+            window_rounded: false,
         }
     }
 
@@ -157,7 +159,7 @@ impl CaptureApp {
 }
 
 impl eframe::App for CaptureApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if self.quit_flag.load(Ordering::SeqCst) {
             self.stop_recording();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -166,6 +168,27 @@ impl eframe::App for CaptureApp {
 
         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
             self.main_viewport_rect = Some(rect);
+
+            #[cfg(windows)]
+            {
+                if !self.window_rounded {
+                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                    if let Ok(handle) = frame.window_handle() {
+                        if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+                            let hwnd = win32_handle.hwnd.get() as isize;
+                            let scale_factor =
+                                ctx.input(|i| i.viewport().native_pixels_per_point.unwrap_or(1.0));
+                            let width = ((rect.max.x - rect.min.x) * scale_factor) as i32;
+                            let height = ((rect.max.y - rect.min.y) * scale_factor) as i32;
+                            if crate::windows_window::set_window_rounded_corner(
+                                hwnd, width, height, 8,
+                            ) {
+                                self.window_rounded = true;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         let bg = if self.is_recording {
