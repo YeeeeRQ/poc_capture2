@@ -138,12 +138,8 @@ pub fn show(
 
                         let pin_btn = ui.add_sized(
                             [28.0, 28.0],
-                            egui::Button::new(
-                                egui::RichText::new(if app.is_pinned { "📌" } else { "📍" })
-                                    .size(14.0)
-                                    .color(pin_txt),
-                            )
-                            .fill(pin_bg),
+                            egui::Button::new(egui::RichText::new("📌").size(14.0).color(pin_txt))
+                                .fill(pin_bg),
                         );
                         if pin_btn.clicked() {
                             app.is_pinned = !app.is_pinned;

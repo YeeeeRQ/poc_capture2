@@ -227,7 +227,7 @@ pub fn show(
                                         [106.0, 36.0],
                                         egui::Button::new(
                                             egui::RichText::new("保存")
-                                                .color(egui::Color32::BLACK)
+                                                .color(egui::Color32::WHITE)
                                                 .size(14.0)
                                                 .strong(),
                                         )
