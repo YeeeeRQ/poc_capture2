@@ -59,6 +59,6 @@ pub struct RecordArgs {
     #[arg(long, help = "Maximum recording duration in seconds (optional)")]
     pub duration: Option<u64>,
 
-    #[arg(long, default_value = "high", value_parser = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], help = "Encoding speed preset")]
+    #[arg(long, default_value = "medium", value_parser = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"], help = "Encoding speed preset")]
     pub preset: String,
 }
