@@ -2,7 +2,7 @@
 
 A Windows 10/11 screen capture and recording tool with both CLI and GUI interfaces.
 
-**Recording uses [windows-capture](https://crates.io/crates/windows-capture) (DXGI Desktop Duplication) for high-performance, high-framerate capture with configurable target FPS.** Screenshots use [xcap](https://crates.io/crates/xcap).
+**Recording and screenshots both use [windows-capture](https://crates.io/crates/windows-capture) (DXGI Desktop Duplication) for high-performance, high-framerate capture.** No GDI or third-party capture library dependencies.
 
 ---
 
@@ -93,30 +93,107 @@ The FPS control is hidden during recording. Recording timer shows elapsed time.
 
 ## Architecture
 
+### Recording Thread Model
+
 ```
-Capture thread (DXGI Desktop Duplication)
-    │
-    ├── BGRA → RGBA conversion
-    ├── Frame rate limiting (MinimumUpdateIntervalSettings)
-    └── Non-blocking send (bounded channel, capacity=2)
-              │
-              ▼
-    Encoder thread
-    │
-    └── write_frame() → FFmpeg stdin
-              │
-              ▼
-    FFmpeg (libx264, H.264)
-    └── output .mp4 file
+┌──────────────────────────────────────────────────────────────┐
+│  GUI thread (egui event loop)                                │
+│  └── RecorderHandle (start / stop / take_screenshot)         │
+│                    │                                         │
+└────────────────────┼─────────────────────────────────────────┘
+                     │
+     ┌───────────────┼───────────────┐
+     │               │               │
+     ▼               ▼               ▼
+┌──────────┐  ┌──────────┐  ┌──────────────────┐
+│ Capture  │  │ Encoder  │  │ Screenshot       │
+│ thread   │  │ thread   │  │ thread (in-rec)  │
+│          │  │          │  │                  │
+│ DXGI     │  │ FFmpeg   │  │ Poll request →  │
+│ callback │──│ stdin    │  │ read snapshot → │
+│          │  │          │  │ encode → write   │
+└──────────┘  └──────────┘  └──────────────────┘
+     │               │
+     ▼               ▼
+  channel        .mp4 file
+ (bounded=2)
 ```
 
-**Key design decisions:**
+### Capture Thread (DXGI)
 
-- Capture and encoding run on **separate threads**, decoupling frame acquisition from FFmpeg write speed
-- `MinimumUpdateIntervalSettings` limits DXGI callback rate to target FPS
-- `bgra_to_rgba` conversion happens on the capture thread before sending
-- Encoder thread drains the channel before exiting (no frame loss at end)
-- `child.wait()` ensures FFmpeg fully completes before recording stops
+```
+on_frame_arrived()
+  ├── Skip if stop_requested or frame_tx is None
+  ├── FPS throttle: skip if < interval since last sent
+  ├── BGRA → RGBA conversion (in-place)
+  ├── Send RGBA frame to encoder channel (non-blocking)
+  ├── Update snapshot_buffer (atomic swap)     ← screenshot reads here
+  └── Check duration limit
+```
+
+### Screenshot Architecture
+
+#### In-Recording Screenshot
+
+When a recording is active, the screenshot uses the **active capture session** via a dedicated background thread:
+
+```
+User clicks screenshot
+  └── RecorderHandle::take_screenshot() [non-blocking, < 1ms]
+        └── set screenshot_request + notify_one()
+
+Screenshot thread (independent polling)
+  └── loop {
+        if stopped: break
+        req = request.lock().take()
+        if req.is_some():
+            pixels = snapshot_buffer.lock().clone()
+            encode_screenshot_to_file(req, pixels)
+        else:
+            sleep(10ms) and retry
+     }
+
+Result: GUI never blocks, screenshot completes asynchronously
+```
+
+**Key design:**
+- Screenshot thread polls `screenshot_request` with 10ms interval — no condvar deadlock risk
+- `take_screenshot()` is fully non-blocking — GUI event loop never stalls
+- `snapshot_buffer` provides atomic frame snapshot — capture thread writes, screenshot thread reads, zero contention on `&mut self`
+
+#### Standalone Screenshot (non-recording)
+
+When not recording, a separate `windows-capture` session captures a single frame:
+
+```
+take_screenshot(ScreenshotSettings)
+  ├── Monitor::from_index(index + 1)
+  ├── start_free_threaded(ScreenshotSettings)
+  │     └── Spawns dedicated capture thread
+  └── wait for frame on condvar (< 500ms typically)
+        └── BGRA → RGBA → encode → write file → stop capture
+```
+
+### Encoder Thread
+
+```
+frame_rx.recv_timeout(100ms)
+  ├── Ok(frame) → enc.write_frame(data)
+  ├── Timeout   → check stop_flag / done_rx, then retry
+  └── Disconnected → enc.finish()
+        └── child.wait() ensures FFmpeg fully completes
+```
+
+---
+
+## Key Design Decisions
+
+- **Capture and encoding on separate threads** — frame acquisition is decoupled from FFmpeg write speed; a bounded channel (capacity=2) absorbs temporary throughput spikes
+- **MinimumUpdateIntervalSettings** limits DXGI callback rate to target FPS, avoiding unnecessary CPU/GPU work
+- **BGRA→RGBA conversion on capture thread** — encoder receives pre-converted data, no conversion overhead in the hot path
+- **Non-blocking screenshot** — `take_screenshot()` returns immediately; encoding runs on an independent thread; GUI is never blocked
+- **Double-buffered snapshot** — capture thread atomically updates `snapshot_buffer`; screenshot thread reads without locking `&mut self`, eliminating deadlocks between GUI and capture threads
+- **Encoder drains channel on exit** — no frame loss at end of recording
 
 ---
 
@@ -124,9 +201,9 @@ Capture thread (DXGI Desktop Duplication)
 
 | Module | Technology |
 |--------|------------|
-| Screen capture | [windows-capture](https://crates.io/crates/windows-capture) (DXGI) |
-| Screenshot | [xcap](https://crates.io/crates/xcap) (GDI) |
-| Image encoding | [image](https://crates.io/crates/image) crate |
+| Screen capture | [windows-capture](https://crates.io/crates/windows-capture) (DXGI Desktop Duplication) |
+| Screenshot | [windows-capture](https://crates.io/crates/windows-capture) (DXGI, same library) |
+| Image encoding | [image](https://crates.io/crates/image) crate (PNG, BMP, JPEG) |
 | Video encoding | FFmpeg libx264 (H.264) |
 | GUI framework | [eframe/egui](https://crates.io/crates/egui) |
 | CLI | [clap v4](https://crates.io/crates/clap) |
@@ -207,13 +284,99 @@ GUI 是一个无边框浮动工具条，支持：
 - 置顶切换
 - 关闭（隐藏窗口，进程继续运行）
 
+### 架构设计
+
+#### 录屏线程模型
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  GUI 线程 (egui 事件循环)                                    │
+│  └── RecorderHandle (start / stop / take_screenshot)        │
+│                    │                                         │
+└────────────────────┼─────────────────────────────────────────┘
+                     │
+     ┌───────────────┼───────────────┐
+     │               │               │
+     ▼               ▼               ▼
+┌──────────┐  ┌──────────┐  ┌──────────────────┐
+│ Capture  │  │ Encoder  │  │ Screenshot       │
+│ 线程     │  │ 线程     │  │ 线程 (录制中)    │
+│          │  │          │  │                  │
+│ DXGI     │  │ FFmpeg   │  │ 轮询请求 →       │
+│ 回调     │──│ stdin    │  │ 读取快照 →       │
+│          │  │          │  │ 编码 → 写入      │
+└──────────┘  └──────────┘  └──────────────────┘
+     │               │
+     ▼               ▼
+  channel        .mp4 文件
+ (bounded=2)
+```
+
+#### 截图架构
+
+**录制中截图** — 使用活动录制会话的后台线程：
+
+```
+用户点击截图
+  └── RecorderHandle::take_screenshot() [非阻塞，< 1ms]
+        └── 设置 screenshot_request + notify_one()
+
+独立轮询的截图线程
+  └── 循环 {
+        if stopped: 退出
+        req = request.lock().take()
+        if req 存在:
+            pixels = snapshot_buffer.lock().clone()
+            encode_screenshot_to_file(req, pixels)
+        else:
+            sleep(10ms) 重试
+     }
+
+结果：GUI 从不阻塞，截图异步完成
+```
+
+**关键设计：**
+- 截图线程通过 10ms 间隔轮询 `screenshot_request` — 无 condvar 死锁风险
+- `take_screenshot()` 完全非阻塞 — GUI 事件循环从不卡顿
+- `snapshot_buffer` 提供原子帧快照 — capture 线程写入，截图线程读取，零竞争
+
+**非录制独立截图** — 创建单独的 windows-capture 会话捕获单帧：
+
+```
+take_screenshot(ScreenshotSettings)
+  ├── Monitor::from_index(index + 1)
+  ├── start_free_threaded(ScreenshotSettings)
+  │     └── 启动专用 capture 线程
+  └── 等待帧到达（通常 < 500ms）
+        └── BGRA → RGBA → 编码 → 写文件 → 停止 capture
+```
+
+#### 编码器线程
+
+```
+frame_rx.recv_timeout(100ms)
+  ├── Ok(frame) → enc.write_frame(data)
+  ├── Timeout   → 检查 stop_flag / done_rx，重试
+  └── Disconnected → enc.finish()
+        └── child.wait() 确保 FFmpeg 完全结束
+```
+
+### 关键设计决策
+
+- **Capture 和 encoding 在独立线程** — 帧获取与 FFmpeg 写入速度解耦；有界 channel（容量=2）吸收临时吞吐峰值
+- **MinimumUpdateIntervalSettings** 限制 DXGI 回调率为目标 FPS，避免不必要的 CPU/GPU 开销
+- **BGRA→RGBA 转换在 capture 线程** — 编码器收到预转换数据，热路径无转换开销
+- **非阻塞截图** — `take_screenshot()` 立即返回；编码在独立线程运行；GUI 永不阻塞
+- **双缓冲快照** — capture 线程原子更新 `snapshot_buffer`；截图线程读取时无需锁定 `&mut self`，消除 GUI 与 capture 线程之间的死锁
+- **编码器退出时排空 channel** — 录制结束时无帧丢失
+
 ### 技术栈
 
 | 模块 | 技术 |
 |------|------|
 | 屏幕捕获 | [windows-capture](https://crates.io/crates/windows-capture) (DXGI Desktop Duplication) |
-| 截图 | [xcap](https://crates.io/crates/xcap) (GDI) |
-| 图片编码 | [image](https://crates.io/crates/image) crate |
+| 截图 | [windows-capture](https://crates.io/crates/windows-capture) (DXGI，同一库) |
+| 图片编码 | [image](https://crates.io/crates/image) crate (PNG, BMP, JPEG) |
 | 视频编码 | FFmpeg libx264 (H.264) |
 | GUI 框架 | [eframe/egui](https://crates.io/crates/egui) |
 | CLI | [clap v4](https://crates.io/crates/clap) |
