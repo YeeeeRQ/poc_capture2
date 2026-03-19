@@ -34,11 +34,22 @@ pub struct CaptureApp {
     settings_was_open: bool,
     pub main_viewport_rect: Option<egui::Rect>,
     window_rounded: bool,
+    session_folder: PathBuf,
 }
 
 impl CaptureApp {
     pub fn new(quit_flag: Arc<AtomicBool>, settings: Settings) -> Self {
         let monitors = list_monitors().unwrap_or_default();
+
+        let session_folder = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(format!("capture_{}", Local::now().format("%Y%m%d_%H%M%S")));
+
+        if let Err(e) = std::fs::create_dir_all(&session_folder) {
+            log::error!("Failed to create session folder: {}", e);
+        } else {
+            log::info!("Session folder: {}", session_folder.display());
+        }
 
         Self {
             monitors,
@@ -57,6 +68,7 @@ impl CaptureApp {
             settings_was_open: false,
             main_viewport_rect: None,
             window_rounded: false,
+            session_folder,
         }
     }
 
@@ -65,13 +77,11 @@ impl CaptureApp {
             return;
         }
         let ext = self.settings.screenshot_format.clone();
-        let path = std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(format!(
-                "screenshot_{}.{}",
-                Local::now().format("%Y%m%d_%H%M%S"),
-                ext
-            ));
+        let path = self.session_folder.join(format!(
+            "screenshot_{}.{}",
+            Local::now().format("%Y%m%d_%H%M%S"),
+            ext
+        ));
         let request = ScreenshotRequest {
             path: path.clone(),
             format: ext.clone(),
@@ -112,9 +122,15 @@ impl CaptureApp {
         if self.selected_monitor >= self.monitors.len() {
             return;
         }
+
+        let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+        let output_path = self
+            .session_folder
+            .join(format!("capture_{}.mp4", timestamp));
+
         let settings = RecordSettings {
             monitor_index: self.selected_monitor,
-            output_path: None,
+            output_path: Some(output_path),
             duration_secs: None,
             target_fps: self.settings.fps,
             preset: "medium".to_string(),
