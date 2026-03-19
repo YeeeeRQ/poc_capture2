@@ -13,23 +13,29 @@ pub fn show(
     txt: egui::Color32,
 ) {
     egui::CentralPanel::default()
-        .frame(egui::Frame::NONE)
+        .frame(egui::Frame {
+            fill: egui::Color32::TRANSPARENT,
+            inner_margin: 0.0.into(),
+            outer_margin: 0.0.into(),
+            ..Default::default()
+        })
         .show(ctx, |ui| {
             let rect = ui.max_rect();
-            let expanded_rect = rect.expand(1.0);
-            let corner_radius = 8.0;
-            ui.painter().rect(
-                rect.expand(1.0),
-                corner_radius,
-                bg,
-                egui::Stroke::new(
-                    1.0,
-                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 255),
-                ),
-                egui::StrokeKind::Outside,
+            let container_width = 430.0_f32.min(rect.width());
+            let container_rect = egui::Rect::from_min_size(
+                rect.min,
+                egui::Vec2::new(container_width, rect.height()),
             );
 
-            ui.allocate_ui(rect.size(), |ui| {
+            ui.painter().rect(
+                container_rect,
+                8.0,
+                bg,
+                egui::Stroke::new(0.0, egui::Color32::TRANSPARENT),
+                egui::StrokeKind::Inside,
+            );
+
+            ui.allocate_ui(container_rect.size(), |ui| {
                 let avail_h = ui.available_height();
                 let toolbar_h = 44.0_f32;
                 let top_space = ((avail_h - toolbar_h) / 2.0).max(0.0);
