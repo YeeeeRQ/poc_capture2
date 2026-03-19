@@ -29,7 +29,7 @@ fn main() -> Result<()> {
 
     let main_w = 440.0_f32;
     let main_h = 48.0_f32;
-    let margin = 40.0_f32;
+    let margin = 88.0_f32;
 
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()

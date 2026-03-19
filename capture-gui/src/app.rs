@@ -399,20 +399,20 @@ impl eframe::App for CaptureApp {
             )
             .show(ctx, |ui| {
                 ui.set_min_height(44.0);
+
+                let full_rect = ui.min_rect();
+                let drag_resp = ui.interact(full_rect, egui::Id::new("drag"), egui::Sense::click());
+                if drag_resp.hovered() {
+                    ctx.set_cursor_icon(egui::CursorIcon::Grab);
+                }
+                if drag_resp.is_pointer_button_down_on() {
+                    ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+
                 ui.horizontal(|ui| {
                     ui.set_min_height(44.0);
                     ui.spacing_mut().item_spacing.x = 6.0;
-
-                    let drag_rect = ui.min_rect();
-                    let drag_response =
-                        ui.interact(drag_rect, egui::Id::new("drag"), egui::Sense::click());
-                    if drag_response.hovered() {
-                        ctx.set_cursor_icon(egui::CursorIcon::Grab);
-                    }
-                    if drag_response.is_pointer_button_down_on() {
-                        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                    }
 
                     let _ = ui.selectable_label(
                         false,
