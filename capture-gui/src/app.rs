@@ -3,11 +3,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use chrono::Local;
 use eframe::egui;
 use parking_lot::Mutex;
 
 use capture_core::{
-    list_monitors, take_screenshot, RecordSettings, RecorderHandle, ScreenshotSettings,
+    list_monitors, take_screenshot, RecordSettings, RecorderHandle, ScreenshotRequest,
+    ScreenshotSettings,
 };
 
 pub struct CaptureApp {
@@ -50,22 +52,30 @@ impl CaptureApp {
         if self.selected_monitor >= self.monitors.len() {
             return;
         }
-        let settings = ScreenshotSettings {
-            monitor_index: self.selected_monitor,
-            output_path: None,
+        let path = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(format!(
+                "screenshot_{}.png",
+                Local::now().format("%Y%m%d_%H%M%S")
+            ));
+        let request = ScreenshotRequest {
+            path,
             format: "png".to_string(),
             quality: 90,
         };
-        match take_screenshot(&settings) {
-            Ok(path) => {
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                log::info!("Screenshot saved: {}", name);
+        if self.is_recording {
+            if let Some(ref handle) = *self.handle.lock() {
+                handle.take_screenshot(request);
             }
-            Err(e) => {
-                log::error!("Screenshot failed: {}", e);
+        } else {
+            match take_screenshot(&ScreenshotSettings {
+                monitor_index: self.selected_monitor,
+                output_path: None,
+                format: "png".to_string(),
+                quality: 90,
+            }) {
+                Ok(p) => log::info!("Screenshot saved: {}", p.display()),
+                Err(e) => log::error!("Screenshot failed: {}", e),
             }
         }
     }

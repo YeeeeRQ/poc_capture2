@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-xcap = "0.2"
 windows-capture = "1.4"
 image = "0.25"
 anyhow = "1"

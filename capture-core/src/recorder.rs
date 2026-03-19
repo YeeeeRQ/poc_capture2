@@ -8,13 +8,18 @@ use parking_lot::{Condvar, Mutex};
 
 use super::capture_adapter::{
     build_capture_settings, get_monitor, setup_dpi_awareness, EncodedFrame, RecordSettings,
+    ScreenshotRequest,
 };
+use windows_capture::capture::CaptureControl;
 
 pub struct RecorderHandle {
     stop_flag: Arc<Mutex<bool>>,
     done_flag: Arc<Mutex<bool>>,
     done_condvar: Arc<Condvar>,
-    done_tx: std::sync::mpsc::Sender<()>,
+    control: CaptureControl<
+        super::capture_adapter::CaptureHandler,
+        Box<dyn std::error::Error + Send + Sync>,
+    >,
 }
 
 impl RecorderHandle {
@@ -108,10 +113,6 @@ impl RecorderHandle {
                 .context("Failed to spawn encoder thread")?
         };
 
-        let stop_flag_clone = Arc::clone(&stop_flag);
-        let done_flag_clone = Arc::clone(&done_flag);
-        let done_condvar_clone = Arc::clone(&done_condvar);
-
         let control = {
             let mut cap_settings = build_capture_settings(width, height, &settings);
             cap_settings.frame_tx = Some(frame_tx.clone());
@@ -138,6 +139,11 @@ impl RecorderHandle {
             target_fps
         );
 
+        let stop_flag_clone = Arc::clone(&stop_flag);
+        let done_flag_clone = Arc::clone(&done_flag);
+        let done_condvar_clone = Arc::clone(&done_condvar);
+        let halt_handle = control.halt_handle();
+
         let join_handle = std::thread::spawn(move || {
             loop {
                 if *stop_flag_clone.lock() {
@@ -145,7 +151,7 @@ impl RecorderHandle {
                     break;
                 }
 
-                if control.halt_handle().load(Ordering::Relaxed) {
+                if halt_handle.load(Ordering::Relaxed) {
                     break;
                 }
 
@@ -163,7 +169,7 @@ impl RecorderHandle {
                 stop_flag,
                 done_flag,
                 done_condvar,
-                done_tx,
+                control,
             },
             join_handle,
         ))
@@ -181,6 +187,12 @@ impl RecorderHandle {
                 break;
             }
         }
+    }
+
+    pub fn take_screenshot(&self, request: ScreenshotRequest) {
+        let callback = self.control.callback();
+        let mut handler = callback.lock();
+        handler.take_screenshot(request);
     }
 }
 

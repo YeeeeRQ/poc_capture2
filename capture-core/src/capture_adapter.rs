@@ -1,13 +1,14 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossbeam::channel;
-use parking_lot::Mutex;
+use image::ImageEncoder;
+use parking_lot::{Condvar, Mutex};
 
 use windows_capture::{
-    capture::{CaptureControl, Context, GraphicsCaptureApiHandler},
+    capture::{CaptureControl, Context as WinCtx, GraphicsCaptureApiHandler},
     frame::Frame,
     graphics_capture_api::InternalCaptureControl,
     monitor::Monitor,
@@ -50,6 +51,13 @@ pub struct CaptureSettings {
     pub done_tx: Option<std::sync::mpsc::Sender<()>>,
 }
 
+#[derive(Clone)]
+pub struct ScreenshotRequest {
+    pub path: PathBuf,
+    pub format: String,
+    pub quality: u8,
+}
+
 pub struct EncodedFrame {
     pub data: Vec<u8>,
     pub timestamp: Duration,
@@ -67,6 +75,12 @@ pub struct CaptureState {
     pub last_sent_time: Arc<Mutex<Instant>>,
     pub frame_tx: Option<channel::Sender<EncodedFrame>>,
     pub done_tx: Option<std::sync::mpsc::Sender<()>>,
+    pub screenshot_request: Arc<Mutex<Option<ScreenshotRequest>>>,
+    pub screenshot_pixel_data: Arc<Mutex<Option<(ScreenshotRequest, Vec<u8>)>>>,
+    pub screenshot_done: Arc<Condvar>,
+    pub screenshot_done_flag: Arc<Mutex<bool>>,
+    pub screenshot_stopped: Arc<AtomicBool>,
+    pub screenshot_join_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl Default for CaptureState {
@@ -83,6 +97,12 @@ impl Default for CaptureState {
             last_sent_time: Arc::new(Mutex::new(Instant::now())),
             frame_tx: None,
             done_tx: None,
+            screenshot_request: Arc::new(Mutex::new(None)),
+            screenshot_pixel_data: Arc::new(Mutex::new(None)),
+            screenshot_done: Arc::new(Condvar::new()),
+            screenshot_done_flag: Arc::new(Mutex::new(false)),
+            screenshot_stopped: Arc::new(AtomicBool::new(false)),
+            screenshot_join_handle: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -101,6 +121,49 @@ impl CaptureHandler {
         if let Some(dur) = self.settings.duration_secs {
             self.state.duration = Some(Duration::from_secs(dur));
         }
+
+        if self.state.screenshot_join_handle.lock().is_none() {
+            let pixel_data = Arc::clone(&self.state.screenshot_pixel_data);
+            let done = Arc::clone(&self.state.screenshot_done);
+            let done_flag = Arc::clone(&self.state.screenshot_done_flag);
+            let stopped = Arc::clone(&self.state.screenshot_stopped);
+            let width = self.settings.width;
+            let height = self.settings.height;
+
+            let jh = std::thread::Builder::new()
+                .name("screenshot".to_string())
+                .spawn(move || loop {
+                    if stopped.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let mut guard = done_flag.lock();
+                    while !*guard {
+                        if stopped.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        done.wait(&mut guard);
+                    }
+                    *guard = false;
+                    drop(guard);
+
+                    let (req, pixels) = {
+                        let req_guard = pixel_data.lock();
+                        let req = req_guard.as_ref().map(|(r, p)| (r.clone(), p.clone()));
+                        drop(req_guard);
+                        match req {
+                            Some((r, p)) => (r, p),
+                            None => continue,
+                        }
+                    };
+
+                    if let Err(e) = encode_screenshot_to_file(&req, &pixels, width, height) {
+                        log::error!("Screenshot encoding failed: {}", e);
+                    }
+                })
+                .expect("Failed to spawn screenshot thread");
+            *self.state.screenshot_join_handle.lock() = Some(jh);
+        }
+
         log::info!(
             "Recording: {}x{} @ {} fps, output={}",
             self.settings.width,
@@ -111,12 +174,38 @@ impl CaptureHandler {
     }
 }
 
+fn encode_screenshot_to_file(
+    req: &ScreenshotRequest,
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+) -> anyhow::Result<()> {
+    let file = std::fs::File::create(&req.path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    let ext = req.format.to_lowercase();
+    if ext == "jpg" || ext == "jpeg" {
+        let mut rgb_data = Vec::with_capacity((width as usize * height as usize) * 3);
+        for chunk in pixels.chunks_exact(4) {
+            rgb_data.push(chunk[0]);
+            rgb_data.push(chunk[1]);
+            rgb_data.push(chunk[2]);
+        }
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, req.quality);
+        encoder.write_image(&rgb_data, width, height, image::ExtendedColorType::Rgb8)?;
+    } else {
+        let encoder = image::codecs::png::PngEncoder::new(&mut writer);
+        encoder.write_image(pixels, width, height, image::ExtendedColorType::Rgba8)?;
+    }
+    log::info!("Screenshot saved: {}", req.path.display());
+    Ok(())
+}
+
 impl GraphicsCaptureApiHandler for CaptureHandler {
     type Flags = CaptureSettings;
 
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
-    fn new(_ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
+    fn new(_ctx: WinCtx<Self::Flags>) -> Result<Self, Self::Error> {
         Ok(Self {
             settings: CaptureSettings {
                 width: 0,
@@ -171,7 +260,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         self.state.frame_buffer[..copy_len].copy_from_slice(&bgra[..copy_len]);
 
         bgra_to_rgba_inplace(
-            &mut self.state.frame_buffer[..frame_size],
+            &self.state.frame_buffer[..frame_size],
             &mut self.state.rgba_buffer[..frame_size],
         );
 
@@ -220,6 +309,14 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             }
         }
 
+        let pending = { self.state.screenshot_request.lock().take() };
+        if let Some(req) = pending {
+            let pixels = self.state.rgba_buffer[..frame_size].to_vec();
+            *self.state.screenshot_pixel_data.lock() = Some((req, pixels));
+            *self.state.screenshot_done_flag.lock() = true;
+            self.state.screenshot_done.notify_one();
+        }
+
         Ok(())
     }
 
@@ -236,6 +333,11 @@ impl CaptureHandler {
             drop(self.state.frame_tx.take());
             if let Some(tx) = self.state.done_tx.take() {
                 let _ = tx.send(());
+            }
+            self.state.screenshot_stopped.store(true, Ordering::Relaxed);
+            self.state.screenshot_done.notify_one();
+            if let Some(jh) = self.state.screenshot_join_handle.lock().take() {
+                let _ = jh.join();
             }
             let fw = self.state.frame_count.load(Ordering::Relaxed);
             let total_time = self
@@ -263,6 +365,19 @@ impl CaptureHandler {
             );
         }
     }
+
+    pub fn take_screenshot(&mut self, request: ScreenshotRequest) {
+        *self.state.screenshot_request.lock() = Some(request);
+        loop {
+            let guard = self.state.screenshot_done_flag.lock();
+            if *guard {
+                break;
+            }
+            drop(guard);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        *self.state.screenshot_done_flag.lock() = false;
+    }
 }
 
 #[inline]
@@ -282,9 +397,7 @@ fn format_f64(v: f64, decimals: usize) -> String {
 }
 
 #[allow(unused_variables)]
-pub fn setup_dpi_awareness() {
-    // DPI awareness is handled internally by windows-capture
-}
+pub fn setup_dpi_awareness() {}
 
 pub fn get_monitor(index: usize) -> Result<Monitor, windows_capture::monitor::Error> {
     Monitor::from_index(index + 1)
@@ -299,6 +412,8 @@ pub fn enumerate_monitors() -> Result<Vec<MonitorInfo>, windows_capture::monitor
             name: m.name().unwrap_or_else(|_| "Unknown".to_string()),
             width: m.width().unwrap_or(0),
             height: m.height().unwrap_or(0),
+            x: 0,
+            y: 0,
         });
     }
     Ok(result)
@@ -309,6 +424,8 @@ pub struct MonitorInfo {
     pub name: String,
     pub width: u32,
     pub height: u32,
+    pub x: i32,
+    pub y: i32,
 }
 
 pub fn build_capture_settings(
@@ -360,7 +477,7 @@ pub fn start_capture(
     let settings = Settings::new(
         monitor,
         CursorCaptureSettings::WithoutCursor,
-        DrawBorderSettings::Default,
+        DrawBorderSettings::WithoutBorder,
         SecondaryWindowSettings::Default,
         min_interval,
         DirtyRegionSettings::Default,
