@@ -173,6 +173,7 @@ impl eframe::App for CaptureApp {
         if self.settings_open.load(Ordering::SeqCst) {
             let settings_open = Arc::clone(&self.settings_open);
             let local_settings = Arc::new(Mutex::new(self.settings.clone()));
+            let local_settings_for_sync = Arc::clone(&local_settings);
 
             ctx.show_viewport_deferred(
                 *SETTINGS_VIEWPORT_ID,
@@ -184,6 +185,7 @@ impl eframe::App for CaptureApp {
                 move |ctx, _class| {
                     let bg = egui::Color32::from_rgb(30, 30, 42);
                     let label_col = egui::Color32::from_rgb(180, 180, 190);
+                    let settings = Arc::clone(&local_settings_for_sync);
 
                     egui::CentralPanel::default()
                         .frame(
@@ -241,10 +243,10 @@ impl eframe::App for CaptureApp {
                             ui.label(egui::RichText::new("帧率").color(label_col).size(12.0));
 
                             {
-                                let mut settings = local_settings.lock();
-                                let fps_label = if settings.fps == 15 {
+                                let mut s = settings.lock();
+                                let fps_label = if s.fps == 15 {
                                     "15 fps"
-                                } else if settings.fps == 30 {
+                                } else if s.fps == 30 {
                                     "30 fps"
                                 } else {
                                     "60 fps"
@@ -253,9 +255,9 @@ impl eframe::App for CaptureApp {
                                     .selected_text(fps_label)
                                     .width(120.0)
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(&mut settings.fps, 15u32, "15 fps");
-                                        ui.selectable_value(&mut settings.fps, 30u32, "30 fps");
-                                        ui.selectable_value(&mut settings.fps, 60u32, "60 fps");
+                                        ui.selectable_value(&mut s.fps, 15u32, "15 fps");
+                                        ui.selectable_value(&mut s.fps, 30u32, "30 fps");
+                                        ui.selectable_value(&mut s.fps, 60u32, "60 fps");
                                     });
                             }
 
@@ -264,8 +266,8 @@ impl eframe::App for CaptureApp {
                             ui.label(egui::RichText::new("截图格式").color(label_col).size(12.0));
 
                             {
-                                let mut settings = local_settings.lock();
-                                let mut current_fmt = settings.screenshot_format.clone();
+                                let mut s = settings.lock();
+                                let mut current_fmt = s.screenshot_format.clone();
                                 egui::ComboBox::from_id_salt("fmt")
                                     .selected_text(current_fmt.to_uppercase())
                                     .width(120.0)
@@ -278,8 +280,8 @@ impl eframe::App for CaptureApp {
                                             );
                                         }
                                     });
-                                if current_fmt != settings.screenshot_format {
-                                    settings.screenshot_format = current_fmt;
+                                if current_fmt != s.screenshot_format {
+                                    s.screenshot_format = current_fmt;
                                 }
                             }
 
@@ -287,14 +289,14 @@ impl eframe::App for CaptureApp {
 
                             ui.label(egui::RichText::new("截图品质").color(label_col).size(12.0));
                             {
-                                let mut settings = local_settings.lock();
+                                let mut s = settings.lock();
                                 egui::ComboBox::from_id_salt("q")
-                                    .selected_text(format!("Q{}", settings.screenshot_quality))
+                                    .selected_text(format!("Q{}", s.screenshot_quality))
                                     .width(120.0)
                                     .show_ui(ui, |ui| {
                                         for &q in QUALITY_OPTIONS {
                                             ui.selectable_value(
-                                                &mut settings.screenshot_quality,
+                                                &mut s.screenshot_quality,
                                                 q,
                                                 format!("Q{}", q),
                                             );
@@ -340,11 +342,11 @@ impl eframe::App for CaptureApp {
                                     )
                                     .clicked()
                                 {
-                                    let settings = local_settings.lock();
-                                    if let Err(e) = settings.save() {
+                                    let s = settings.lock();
+                                    if let Err(e) = s.save() {
                                         log::error!("Failed to save settings: {}", e);
                                     }
-                                    drop(settings);
+                                    drop(s);
                                     settings_open.store(false, Ordering::SeqCst);
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }
@@ -356,6 +358,14 @@ impl eframe::App for CaptureApp {
                     }
                 },
             );
+
+            let saved = local_settings.lock();
+            if saved.fps != self.settings.fps
+                || saved.screenshot_format != self.settings.screenshot_format
+                || saved.screenshot_quality != self.settings.screenshot_quality
+            {
+                self.settings = saved.clone();
+            }
         }
 
         egui::CentralPanel::default()
