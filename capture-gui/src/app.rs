@@ -95,7 +95,7 @@ impl CaptureApp {
         } else {
             match take_screenshot(&ScreenshotSettings {
                 monitor_index: self.selected_monitor,
-                output_path: None,
+                output_path: Some(path),
                 format: ext,
                 quality: self.settings.screenshot_quality,
             }) {
