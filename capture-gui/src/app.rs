@@ -98,6 +98,7 @@ impl CaptureApp {
                 output_path: Some(path),
                 format: ext,
                 quality: self.settings.screenshot_quality,
+                draw_border: self.settings.draw_border,
             }) {
                 Ok(p) => log::info!("Screenshot saved: {}", p.display()),
                 Err(e) => log::error!("Screenshot failed: {}", e),
@@ -134,6 +135,7 @@ impl CaptureApp {
             duration_secs: None,
             target_fps: self.settings.fps,
             preset: "medium".to_string(),
+            draw_border: self.settings.draw_border,
         };
 
         match RecorderHandle::start(settings) {

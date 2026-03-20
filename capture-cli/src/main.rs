@@ -100,6 +100,7 @@ fn main() -> Result<()> {
                 output_path: args.output.map(PathBuf::from),
                 format: args.format,
                 quality: args.quality,
+                draw_border: false,
             };
             take_screenshot(&settings)?;
         }
@@ -119,6 +120,7 @@ fn main() -> Result<()> {
                 duration_secs: args.duration,
                 target_fps: args.fps,
                 preset: args.preset,
+                draw_border: false,
             };
 
             println!(

@@ -25,6 +25,7 @@ pub struct RecordSettings {
     pub duration_secs: Option<u64>,
     pub preset: String,
     pub target_fps: u32,
+    pub draw_border: bool,
 }
 
 impl Default for RecordSettings {
@@ -35,6 +36,7 @@ impl Default for RecordSettings {
             duration_secs: None,
             preset: "medium".to_string(),
             target_fps: 60,
+            draw_border: false,
         }
     }
 }
@@ -47,6 +49,7 @@ pub struct CaptureSettings {
     pub preset: String,
     pub duration_secs: Option<u64>,
     pub target_fps: u32,
+    pub draw_border: bool,
     pub frame_tx: Option<channel::Sender<EncodedFrame>>,
     pub done_tx: Option<std::sync::mpsc::Sender<()>>,
 }
@@ -168,6 +171,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 preset: "medium".to_string(),
                 duration_secs: None,
                 target_fps: 60,
+                draw_border: false,
                 frame_tx: None,
                 done_tx: None,
             },
@@ -381,6 +385,7 @@ pub fn build_capture_settings(
         preset: settings.preset.clone(),
         duration_secs: settings.duration_secs,
         target_fps: settings.target_fps,
+        draw_border: settings.draw_border,
         frame_tx: None,
         done_tx: None,
     }
@@ -404,7 +409,11 @@ pub fn start_capture(
     let settings = Settings::new(
         monitor,
         CursorCaptureSettings::WithoutCursor,
-        DrawBorderSettings::WithBorder,
+        if capture_settings.draw_border {
+            DrawBorderSettings::WithBorder
+        } else {
+            DrawBorderSettings::WithoutBorder
+        },
         SecondaryWindowSettings::Default,
         min_interval,
         DirtyRegionSettings::Default,

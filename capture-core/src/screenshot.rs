@@ -71,6 +71,7 @@ pub struct ScreenshotSettings {
     pub output_path: Option<PathBuf>,
     pub format: String,
     pub quality: u8,
+    pub draw_border: bool,
 }
 
 impl Default for ScreenshotSettings {
@@ -80,6 +81,7 @@ impl Default for ScreenshotSettings {
             output_path: None,
             format: "png".to_string(),
             quality: 90,
+            draw_border: false,
         }
     }
 }
@@ -190,7 +192,11 @@ pub fn take_screenshot(settings: &ScreenshotSettings) -> Result<PathBuf> {
     let screenshot_settings = Settings::new(
         monitor,
         CursorCaptureSettings::WithoutCursor,
-        DrawBorderSettings::WithBorder,
+        if settings.draw_border {
+            DrawBorderSettings::WithBorder
+        } else {
+            DrawBorderSettings::WithoutBorder
+        },
         SecondaryWindowSettings::Default,
         MinimumUpdateIntervalSettings::Default,
         DirtyRegionSettings::Default,

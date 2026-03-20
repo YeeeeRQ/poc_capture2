@@ -26,7 +26,7 @@ pub fn show(
         None => return,
     };
 
-    let settings_h = 320.0_f32;
+    let settings_h = 360.0_f32;
     let settings_w = 260.0_f32;
     let gap = 10.0_f32;
 
@@ -63,7 +63,7 @@ pub fn show(
                         .inner_margin(egui::Margin::same(16)),
                 )
                 .show(ctx, |ui| {
-                    ui.set_min_height(280.0);
+                    ui.set_min_height(320.0);
 
                     let drag_rect = ui.min_rect();
                     let drag_resp = ui.interact(
@@ -179,6 +179,16 @@ pub fn show(
                                     ui.selectable_value(&mut s.fps, 30u32, "30 fps");
                                     ui.selectable_value(&mut s.fps, 60u32, "60 fps");
                                 });
+                        });
+                    });
+
+                    ui.add_space(6.0);
+
+                    ui.horizontal(|ui| {
+                        let mut s = settings.lock();
+                        ui.label(egui::RichText::new("边框").color(label_col).size(13.0));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.checkbox(&mut s.draw_border, "");
                         });
                     });
 

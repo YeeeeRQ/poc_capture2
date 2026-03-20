@@ -11,6 +11,7 @@ pub struct Settings {
     pub fps: u32,
     pub screenshot_format: String,
     pub screenshot_quality: u8,
+    pub draw_border: bool,
 }
 
 impl Default for Settings {
@@ -19,6 +20,7 @@ impl Default for Settings {
             fps: 60,
             screenshot_format: "jpg".to_string(),
             screenshot_quality: 80,
+            draw_border: false,
         }
     }
 }
