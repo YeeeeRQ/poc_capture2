@@ -44,7 +44,7 @@ fn main() -> Result<()> {
         .map(|r| (r.x, r.y, r.width, r.height))
         .unwrap_or((0, 0, 1920, 1080));
 
-    let main_w = 440.0_f32;
+    let main_w = 475.0_f32;
     let main_h = 48.0_f32;
     let margin = 88.0_f32;
 

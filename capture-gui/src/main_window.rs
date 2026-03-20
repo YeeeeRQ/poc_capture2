@@ -78,14 +78,12 @@ pub fn show(
                                 }
                             });
 
-                        if app.is_recording {
-                            ui.label(
-                                egui::RichText::new(app.timer_text())
-                                    .color(egui::Color32::WHITE)
-                                    .size(14.0)
-                                    .strong(),
-                            );
-                        }
+                        ui.label(
+                            egui::RichText::new(app.timer_text())
+                                .color(egui::Color32::WHITE)
+                                .size(14.0)
+                                .strong(),
+                        );
 
                         let screenshot_btn = ui.add_sized(
                             [60.0, 28.0],
