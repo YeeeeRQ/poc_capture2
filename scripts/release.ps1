@@ -49,7 +49,7 @@ function Build-Release {
 
 function New-StagingDirectory {
     $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $stagingDir = Join-Path $ProjectRoot "staging_$timestamp"
+    $stagingDir = Join-Path $ProjectRoot "target\staging_$timestamp"
     New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
     return $stagingDir
 }
@@ -126,7 +126,7 @@ function Compress-Package {
     Write-Host "=== Creating package ==="
 
     $zipName = "capture-$Version-win64.zip"
-    $zipPath = Join-Path $ProjectRoot $zipName
+    $zipPath = Join-Path $ProjectRoot "target\$zipName"
 
     Set-Location $StagingDir
     try {
