@@ -190,7 +190,7 @@ pub fn take_screenshot(settings: &ScreenshotSettings) -> Result<PathBuf> {
     let screenshot_settings = Settings::new(
         monitor,
         CursorCaptureSettings::WithoutCursor,
-        DrawBorderSettings::WithoutBorder,
+        DrawBorderSettings::WithBorder,
         SecondaryWindowSettings::Default,
         MinimumUpdateIntervalSettings::Default,
         DirtyRegionSettings::Default,

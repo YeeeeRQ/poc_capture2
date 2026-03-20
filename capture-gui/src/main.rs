@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::env;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -21,6 +23,17 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .init();
+
+    if let Some(idx) = env::args().position(|arg| arg == "--dxgi-diagnostic") {
+        let output_file = env::args().nth(idx + 1);
+        let options = capture_core::DxgiDiagnosticOptions {
+            verbose: true,
+            output_file: output_file.map(PathBuf::from),
+            exit_after: true,
+        };
+        capture_core::run_diagnostics(&options);
+        return Ok(());
+    }
 
     let quit_flag = Arc::new(AtomicBool::new(false));
     let quit_for_app = Arc::clone(&quit_flag);

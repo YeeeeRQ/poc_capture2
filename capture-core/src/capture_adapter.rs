@@ -404,7 +404,7 @@ pub fn start_capture(
     let settings = Settings::new(
         monitor,
         CursorCaptureSettings::WithoutCursor,
-        DrawBorderSettings::WithoutBorder,
+        DrawBorderSettings::WithBorder,
         SecondaryWindowSettings::Default,
         min_interval,
         DirtyRegionSettings::Default,

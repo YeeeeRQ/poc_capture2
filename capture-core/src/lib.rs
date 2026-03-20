@@ -1,4 +1,5 @@
 pub mod capture_adapter;
+pub mod dxgi_diagnostic;
 pub mod encoder;
 pub mod recorder;
 pub mod screenshot;
@@ -6,6 +7,7 @@ pub mod screenshot;
 pub use capture_adapter::enumerate_monitors;
 pub use capture_adapter::RecordSettings;
 pub use capture_adapter::ScreenshotRequest;
+pub use dxgi_diagnostic::{run_diagnostics, DxgiDiagnosticOptions};
 pub use encoder::FfmpegEncoder;
 pub use recorder::RecorderHandle;
 pub use screenshot::{

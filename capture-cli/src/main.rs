@@ -4,7 +4,8 @@ use log::LevelFilter;
 use std::path::PathBuf;
 
 use capture_core::{
-    list_monitors, take_screenshot, RecordSettings, RecorderHandle, ScreenshotSettings,
+    list_monitors, run_diagnostics, take_screenshot, DxgiDiagnosticOptions, RecordSettings,
+    RecorderHandle, ScreenshotSettings,
 };
 
 #[derive(Parser, Debug)]
@@ -14,8 +15,10 @@ use capture_core::{
     about = "Windows screen capture tool: screenshot & recording"
 )]
 struct Cli {
+    #[arg(long, help = "Run DXGI diagnostic and exit")]
+    dxgi_diagnostic: Option<Option<String>>,
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -64,7 +67,24 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    match cli.command {
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            if cli.dxgi_diagnostic.is_some() {
+                let file_path = cli.dxgi_diagnostic.as_ref().unwrap().as_ref();
+                let options = DxgiDiagnosticOptions {
+                    verbose: true,
+                    output_file: file_path.map(PathBuf::from),
+                    exit_after: true,
+                };
+                run_diagnostics(&options);
+                return Ok(());
+            }
+            anyhow::bail!("No subcommand provided. Use --help for usage information.");
+        }
+    };
+
+    match command {
         Commands::Screenshot(args) => {
             let monitors = list_monitors()?;
             if args.monitor >= monitors.len() {
