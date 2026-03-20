@@ -15,10 +15,11 @@ use super::capture_adapter::{
 use windows_capture::capture::CaptureControl;
 
 pub struct RecorderHandle {
-    #[allow(dead_code)]
-    control: CaptureControl<
-        super::capture_adapter::CaptureHandler,
-        Box<dyn std::error::Error + Send + Sync>,
+    control: Option<
+        CaptureControl<
+            super::capture_adapter::CaptureHandler,
+            Box<dyn std::error::Error + Send + Sync>,
+        >,
     >,
     #[allow(dead_code)]
     screenshot_stopped: Arc<AtomicBool>,
@@ -238,7 +239,7 @@ impl RecorderHandle {
                 stop_flag,
                 done_flag,
                 done_condvar,
-                control,
+                control: Some(control),
                 screenshot_request,
                 screenshot_done,
                 screenshot_stopped,
@@ -248,8 +249,11 @@ impl RecorderHandle {
         ))
     }
 
-    pub fn stop(&self) {
+    pub fn stop(&mut self) {
         *self.stop_flag.lock() = true;
+        if let Some(c) = self.control.take() {
+            let _ = c.stop();
+        }
         loop {
             if *self.done_flag.lock() {
                 break;

@@ -270,7 +270,12 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
     }
 
     fn on_closed(&mut self) -> Result<(), Self::Error> {
+        log::info!("[CaptureHandler] on_closed called");
+        if let Some(tx) = self.state.done_tx.take() {
+            let _ = tx.send(());
+        }
         self.request_stop();
+        log::info!("[CaptureHandler] on_closed finished");
         Ok(())
     }
 }
@@ -278,6 +283,10 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
 impl CaptureHandler {
     pub fn request_stop(&mut self) {
         let prev = self.state.stop_requested.fetch_add(1, Ordering::SeqCst);
+        log::info!(
+            "[CaptureHandler] request_stop called, stop_requested={}",
+            prev + 1
+        );
         if prev == 0 {
             drop(self.state.frame_tx.take());
             if let Some(tx) = self.state.done_tx.take() {

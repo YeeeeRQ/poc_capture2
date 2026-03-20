@@ -2,10 +2,14 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 use std::fs;
 use std::io::Write;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub struct FfmpegEncoder {
     width: u32,
@@ -85,7 +89,8 @@ impl FfmpegEncoder {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW);
 
         let mut child = cmd.spawn().context("Failed to spawn FFmpeg")?;
 
@@ -278,6 +283,7 @@ impl FfmpegEncoder {
                     ])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
                     .status();
 
                 if status.map(|s| s.success()).unwrap_or(false) {

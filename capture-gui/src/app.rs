@@ -153,9 +153,11 @@ impl CaptureApp {
     }
 
     pub fn stop_recording(&mut self) {
-        if let Some(h) = self.handle.lock().take() {
+        log::info!("[App] stop_recording called");
+        if let Some(mut h) = self.handle.lock().take() {
             h.stop();
         }
+        std::thread::sleep(Duration::from_millis(500));
         if let Some(jh) = self.join_handle.lock().take() {
             if let Ok(Err(e)) = jh.join() {
                 log::error!("Recording error: {}", e);
@@ -163,7 +165,7 @@ impl CaptureApp {
         }
         self.is_recording = false;
         self.record_start = None;
-        log::info!("Recording stopped");
+        log::info!("[App] stop_recording finished");
     }
 
     pub fn timer_text(&self) -> String {
