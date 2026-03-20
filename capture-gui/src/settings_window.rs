@@ -26,7 +26,7 @@ pub fn show(
         None => return,
     };
 
-    let settings_h = 360.0_f32;
+    let settings_h = 340.0_f32;
     let settings_w = 260.0_f32;
     let gap = 10.0_f32;
 

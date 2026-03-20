@@ -43,6 +43,8 @@ struct ScreenshotArgs {
     format: String,
     #[arg(short, long, default_value = "90")]
     quality: u8,
+    #[arg(long, default_value = "false")]
+    border: bool,
 }
 
 #[derive(Parser, Debug, Default)]
@@ -57,6 +59,8 @@ struct RecordArgs {
     fps: u32,
     #[arg(long, default_value = "medium", value_parser = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"])]
     preset: String,
+    #[arg(long, default_value = "false")]
+    border: bool,
 }
 
 fn main() -> Result<()> {
@@ -100,7 +104,7 @@ fn main() -> Result<()> {
                 output_path: args.output.map(PathBuf::from),
                 format: args.format,
                 quality: args.quality,
-                draw_border: false,
+                draw_border: args.border,
             };
             take_screenshot(&settings)?;
         }
@@ -120,7 +124,7 @@ fn main() -> Result<()> {
                 duration_secs: args.duration,
                 target_fps: args.fps,
                 preset: args.preset,
-                draw_border: false,
+                draw_border: args.border,
             };
 
             println!(
