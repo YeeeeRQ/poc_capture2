@@ -201,13 +201,21 @@ frame_rx.recv_timeout(100ms)
 
 | Module | Technology |
 |--------|------------|
-| Screen capture | [windows-capture](https://crates.io/crates/windows-capture) (DXGI Desktop Duplication) |
-| Screenshot | [windows-capture](https://crates.io/crates/windows-capture) (DXGI, same library) |
+| Screen capture | [windows-capture](https://github.com/YeeeeRQ/windows-capture) (DXGI Desktop Duplication, fork with graceful fallback) |
+| Screenshot | [windows-capture](https://github.com/YeeeeRQ/windows-capture) (DXGI, same fork) |
 | Image encoding | [image](https://crates.io/crates/image) crate (PNG, BMP, JPEG) |
 | Video encoding | FFmpeg libx264 (H.264) |
 | GUI framework | [eframe/egui](https://crates.io/crates/egui) |
 | CLI | [clap v4](https://crates.io/crates/clap) |
 | Threading | [crossbeam](https://crates.io/crates/crossbeam) + parking_lot |
+
+### About the windows-capture Fork
+
+This project uses [YeeeeRQ/windows-capture](https://github.com/YeeeeRQ/windows-capture) fork based on v1.5.0 with Graceful Fallback mechanism:
+
+- When Graphics Capture API features (like `IsBorderRequired`) are not supported on the current system, outputs warnings instead of errors
+- Fixes "Toggling the capture border is not supported" error on certain Windows 10/11 systems
+- In testing, when detection returns false, screenshot and recording still work normally
 
 ---
 
@@ -374,13 +382,21 @@ frame_rx.recv_timeout(100ms)
 
 | 模块 | 技术 |
 |------|------|
-| 屏幕捕获 | [windows-capture](https://crates.io/crates/windows-capture) (DXGI Desktop Duplication) |
-| 截图 | [windows-capture](https://crates.io/crates/windows-capture) (DXGI，同一库) |
+| 屏幕捕获 | [windows-capture](https://github.com/YeeeeRQ/windows-capture) (DXGI Desktop Duplication，含 graceful fallback) |
+| 截图 | [windows-capture](https://github.com/YeeeeRQ/windows-capture) (DXGI，同一 fork) |
 | 图片编码 | [image](https://crates.io/crates/image) crate (PNG, BMP, JPEG) |
 | 视频编码 | FFmpeg libx264 (H.264) |
 | GUI 框架 | [eframe/egui](https://crates.io/crates/egui) |
 | CLI | [clap v4](https://crates.io/crates/clap) |
 | 线程 | [crossbeam](https://crates.io/crates/crossbeam) + parking_lot |
+
+### 关于 windows-capture Fork
+
+本项目使用 [YeeeeRQ/windows-capture](https://github.com/YeeeeRQ/windows-capture) fork，基于 v1.5.0 添加了 Graceful Fallback 机制：
+
+- 当 Graphics Capture API 某些功能（如 `IsBorderRequired`）在当前系统不支持时，输出警告而非报错
+- 解决了在某些 Windows 10/11 系统上出现的 "Toggling the capture border is not supported" 错误
+- 实际测试中，检测返回 false 时截图和录屏功能仍然正常工作
 
 ### 二进制分发
 
