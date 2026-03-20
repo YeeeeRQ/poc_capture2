@@ -53,21 +53,10 @@ impl eframe::App for CaptureApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             }
 
-            if tray_state.take_screenshot() {
-                log::info!("[App] Screenshot requested from tray");
-                tray_state.screenshot_flag.store(true, Ordering::SeqCst);
-            }
-
-            if tray_state.take_recording_toggle() {
-                log::info!("[App] Recording toggle requested from tray");
-                tray_state
-                    .recording_toggle_flag
-                    .store(true, Ordering::SeqCst);
-            }
-
             let is_rec = tray_state.is_recording.load(Ordering::SeqCst);
             let timer = if is_rec {
-                if let Some(start) = *tray_state.record_start.lock().unwrap() {
+                let guard = tray_state.record_start.lock();
+                if let Some(start) = *guard {
                     let s = start.elapsed().as_secs();
                     format!("{:02}:{:02}", (s / 60) % 60, s % 60)
                 } else {
@@ -76,7 +65,7 @@ impl eframe::App for CaptureApp {
             } else {
                 "00:00".to_string()
             };
-            let monitors = tray_state.monitors.lock().unwrap().clone();
+            let monitors = tray_state.monitors.lock().clone();
             let selected = tray_state.selected_monitor.load(Ordering::SeqCst);
 
             (is_rec, timer, monitors, selected)

@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use capture_core::RecorderHandle;
+use parking_lot::Mutex;
+
 #[cfg(windows)]
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
@@ -18,9 +21,10 @@ pub struct TrayState {
     pub show_window_flag: Arc<AtomicBool>,
     pub session_folder: PathBuf,
     pub is_recording: Arc<AtomicBool>,
-    pub monitors: Arc<std::sync::Mutex<Vec<capture_core::MonitorInfo>>>,
+    pub monitors: Arc<Mutex<Vec<capture_core::MonitorInfo>>>,
     pub selected_monitor: Arc<std::sync::atomic::AtomicUsize>,
-    pub record_start: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    pub record_start: Arc<Mutex<Option<std::time::Instant>>>,
+    pub handle: Arc<Mutex<Option<RecorderHandle>>>,
 }
 
 struct TrayStateInner {
@@ -30,9 +34,10 @@ struct TrayStateInner {
     show_window_flag: Arc<AtomicBool>,
     session_folder: PathBuf,
     is_recording: Arc<AtomicBool>,
-    monitors: Arc<std::sync::Mutex<Vec<capture_core::MonitorInfo>>>,
+    monitors: Arc<Mutex<Vec<capture_core::MonitorInfo>>>,
     selected_monitor: Arc<std::sync::atomic::AtomicUsize>,
-    record_start: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    record_start: Arc<Mutex<Option<std::time::Instant>>>,
+    handle: Arc<Mutex<Option<RecorderHandle>>>,
 }
 
 pub fn get_tray_state() -> Option<TrayState> {
@@ -46,6 +51,7 @@ pub fn get_tray_state() -> Option<TrayState> {
         monitors: Arc::clone(&state.monitors),
         selected_monitor: Arc::clone(&state.selected_monitor),
         record_start: Arc::clone(&state.record_start),
+        handle: Arc::clone(&state.handle),
     })
 }
 
@@ -62,9 +68,10 @@ impl TrayState {
             show_window_flag: Arc::new(AtomicBool::new(false)),
             session_folder,
             is_recording: Arc::new(AtomicBool::new(false)),
-            monitors: Arc::new(std::sync::Mutex::new(monitors)),
+            monitors: Arc::new(Mutex::new(monitors)),
             selected_monitor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            record_start: Arc::new(std::sync::Mutex::new(None)),
+            record_start: Arc::new(Mutex::new(None)),
+            handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -162,6 +169,7 @@ pub fn setup_tray(
         monitors: Arc::clone(&state.monitors),
         selected_monitor: Arc::clone(&state.selected_monitor),
         record_start: Arc::clone(&state.record_start),
+        handle: Arc::clone(&state.handle),
     };
     TRAY_STATE.set(inner).ok();
     log::info!("[Tray] Tray icon setup complete");

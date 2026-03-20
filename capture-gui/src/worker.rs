@@ -37,6 +37,15 @@ pub fn spawn_worker(state: WorkerState) {
             if let Some(tray_state) = crate::tray::get_tray_state() {
                 if tray_state.quit_flag.load(Ordering::SeqCst) {
                     log::info!("[Worker] Quit flag detected");
+
+                    if tray_state.is_recording.load(Ordering::SeqCst) {
+                        log::info!("[Worker] Stopping recording before quit");
+                        if let Some(mut handle) = tray_state.handle.lock().take() {
+                            handle.stop();
+                        }
+                        tray_state.is_recording.store(false, Ordering::SeqCst);
+                    }
+
                     if !session_has_content.load(Ordering::SeqCst) {
                         if session_folder.exists() {
                             if let Ok(entries) = std::fs::read_dir(&session_folder) {
@@ -57,7 +66,7 @@ pub fn spawn_worker(state: WorkerState) {
 
                 if tray_state.screenshot_flag.swap(false, Ordering::SeqCst) {
                     log::info!("[Worker] Screenshot requested");
-                    let monitors = tray_state.monitors.lock().unwrap();
+                    let monitors = tray_state.monitors.lock();
                     let selected = tray_state.selected_monitor.load(Ordering::SeqCst);
                     if selected >= monitors.len() {
                         log::warn!("[Worker] Invalid monitor selected");
@@ -70,7 +79,7 @@ pub fn spawn_worker(state: WorkerState) {
                         ));
 
                         if tray_state.is_recording.load(Ordering::SeqCst) {
-                            log::info!("[Worker] Screenshot during recording");
+                            log::info!("[Worker] Screenshot during recording - not implemented");
                         } else {
                             match take_screenshot(&ScreenshotSettings {
                                 monitor_index: selected,
@@ -96,9 +105,13 @@ pub fn spawn_worker(state: WorkerState) {
                     log::info!("[Worker] Recording toggle requested");
                     if tray_state.is_recording.load(Ordering::SeqCst) {
                         log::info!("[Worker] Stopping recording");
+                        if let Some(mut handle) = tray_state.handle.lock().take() {
+                            handle.stop();
+                        }
                         tray_state.is_recording.store(false, Ordering::SeqCst);
+                        tray_state.record_start.lock().take();
                     } else {
-                        let monitors = tray_state.monitors.lock().unwrap();
+                        let monitors = tray_state.monitors.lock();
                         let selected = tray_state.selected_monitor.load(Ordering::SeqCst);
                         if selected >= monitors.len() {
                             log::warn!("[Worker] Invalid monitor selected");
@@ -117,9 +130,10 @@ pub fn spawn_worker(state: WorkerState) {
                             };
 
                             match RecorderHandle::start(record_settings) {
-                                Ok((_handle, _jh)) => {
+                                Ok((handle, _jh)) => {
+                                    *tray_state.handle.lock() = Some(handle);
                                     tray_state.is_recording.store(true, Ordering::SeqCst);
-                                    *tray_state.record_start.lock().unwrap() = Some(Instant::now());
+                                    *tray_state.record_start.lock() = Some(Instant::now());
                                     session_has_content.store(true, Ordering::SeqCst);
                                     log::info!("[Worker] Recording started");
                                 }
