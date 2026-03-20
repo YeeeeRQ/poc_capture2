@@ -180,10 +180,33 @@ impl CaptureApp {
 
 impl eframe::App for CaptureApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(tray_state) = crate::tray::get_tray_state() {
+            if tray_state.quit_flag.load(Ordering::SeqCst) {
+                self.stop_recording();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                std::process::exit(0);
+            }
+
+            if tray_state.take_show_window() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(475.0, 48.0)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            }
+
+            if tray_state.take_screenshot() {
+                self.screenshot();
+            }
+
+            if tray_state.take_recording_toggle() {
+                self.toggle_recording();
+            }
+        }
+
         if self.quit_flag.load(Ordering::SeqCst) {
             self.stop_recording();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
+            std::process::exit(0);
         }
 
         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
@@ -234,7 +257,7 @@ impl eframe::App for CaptureApp {
             &self.main_viewport_rect,
         );
 
-        main_window::show(ctx, self, Arc::clone(&self.quit_flag), bg, txt);
+        main_window::show(ctx, self, bg, txt);
 
         if self.screenshot_loading_pending.load(Ordering::SeqCst) {
             self.screenshot_loading_pending

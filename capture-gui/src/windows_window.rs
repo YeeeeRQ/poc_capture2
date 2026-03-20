@@ -10,7 +10,6 @@ extern "system" {
     fn SetWindowRgn(hwnd: isize, hrgn: isize, bRedraw: i32) -> i32;
     fn GetModuleHandleW(lpModuleName: *const u16) -> isize;
     fn GetProcAddress(hModule: isize, lpProcName: *const u8) -> isize;
-    fn SetWindowLongPtrW(hwnd: isize, nIndex: c_int, dwNewLong: isize) -> isize;
 }
 
 #[cfg(windows)]
@@ -32,8 +31,6 @@ struct WindowCompositionAttributeData {
 
 #[cfg(windows)]
 const WCA_ACCENT_POLICY: u32 = 19;
-#[cfg(windows)]
-const ACCENT_ENABLE_BLURBEHIND: u32 = 2;
 #[cfg(windows)]
 const ACCENT_ENABLE_HOSTBACKDROP: u32 = 29;
 

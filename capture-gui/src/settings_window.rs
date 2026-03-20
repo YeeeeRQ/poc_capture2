@@ -225,6 +225,7 @@ pub fn show(
                                     )
                                     .clicked()
                                 {
+                                    log::info!("[Settings] Cancel clicked");
                                     SETTINGS_ROUNDED.store(false, Ordering::SeqCst);
                                     settings_open.store(false, Ordering::SeqCst);
                                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -245,6 +246,7 @@ pub fn show(
                                     )
                                     .clicked()
                                 {
+                                    log::info!("[Settings] Save clicked");
                                     let s = settings.lock();
                                     if let Err(e) = s.save() {
                                         log::error!("Failed to save settings: {}", e);
@@ -260,6 +262,7 @@ pub fn show(
                 });
 
             if ctx.input(|i| i.viewport().close_requested()) {
+                log::info!("[Settings] Viewport close requested");
                 settings_open.store(false, Ordering::SeqCst);
                 SETTINGS_ROUNDED.store(false, Ordering::SeqCst);
             }

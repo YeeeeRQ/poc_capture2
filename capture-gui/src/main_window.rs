@@ -1,17 +1,8 @@
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-
 use eframe::egui;
 
 use crate::app::CaptureApp;
 
-pub fn show(
-    ctx: &egui::Context,
-    app: &mut CaptureApp,
-    quit_flag: Arc<AtomicBool>,
-    bg: egui::Color32,
-    txt: egui::Color32,
-) {
+pub fn show(ctx: &egui::Context, app: &mut CaptureApp, bg: egui::Color32, txt: egui::Color32) {
     egui::CentralPanel::default()
         .frame(egui::Frame {
             fill: egui::Color32::TRANSPARENT,
@@ -99,6 +90,7 @@ pub fn show(
                             .fill(egui::Color32::from_rgb(80, 200, 120)),
                         );
                         if screenshot_btn.clicked() {
+                            log::info!("[MainWindow] Screenshot clicked");
                             app.screenshot();
                         }
 
@@ -120,6 +112,10 @@ pub fn show(
                             }),
                         );
                         if record_btn.clicked() {
+                            log::info!(
+                                "[MainWindow] Record clicked, is_recording={}",
+                                app.is_recording
+                            );
                             app.toggle_recording();
                         }
 
@@ -140,7 +136,13 @@ pub fn show(
                                 .fill(pin_bg),
                         );
                         if pin_btn.clicked() {
-                            app.is_pinned = !app.is_pinned;
+                            let new_pinned = !app.is_pinned;
+                            log::info!(
+                                "[MainWindow] Pin clicked, is_pinned: {} -> {}",
+                                app.is_pinned,
+                                new_pinned
+                            );
+                            app.is_pinned = new_pinned;
                             ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
                                 if app.is_pinned {
                                     egui::WindowLevel::AlwaysOnTop
@@ -159,6 +161,7 @@ pub fn show(
                             .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12)),
                         );
                         if settings_btn.clicked() {
+                            log::info!("[MainWindow] Settings clicked");
                             app.settings_open
                                 .store(true, std::sync::atomic::Ordering::SeqCst);
                         }
@@ -173,9 +176,8 @@ pub fn show(
                             .fill(egui::Color32::from_rgb(220, 70, 70)),
                         );
                         if close_btn.clicked() {
-                            quit_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-                            app.stop_recording();
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            log::info!("[MainWindow] Close clicked, hiding window");
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
                         }
 
                         let drag_rect = record_icon.rect.expand(4.0);
@@ -185,6 +187,7 @@ pub fn show(
                             ctx.set_cursor_icon(egui::CursorIcon::Grab);
                         }
                         if drag_resp.is_pointer_button_down_on() {
+                            log::info!("[MainWindow] Drag started");
                             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
                             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                         }

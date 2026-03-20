@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use eframe::egui;
-use eframe::run_native;
 
 mod app;
 mod main_window;
 mod settings;
 mod settings_window;
+mod tray;
 #[cfg(windows)]
 mod windows_window;
 
@@ -38,6 +38,8 @@ fn main() -> Result<()> {
     let quit_flag = Arc::new(AtomicBool::new(false));
     let quit_for_app = Arc::clone(&quit_flag);
 
+    tray::setup_tray(quit_for_app.clone());
+
     let app_settings = Settings::load();
 
     let primary = capture_core::get_primary_monitor_rect()
@@ -48,8 +50,8 @@ fn main() -> Result<()> {
     let main_h = 48.0_f32;
     let margin = 88.0_f32;
 
-    let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
             .with_decorations(false)
             .with_transparent(true)
             .with_inner_size([main_w, main_h])
@@ -64,9 +66,9 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    run_native(
+    eframe::run_native(
         "Capture",
-        options,
+        native_options,
         Box::new(move |cc| {
             let mut fonts = egui::FontDefinitions::default();
 
