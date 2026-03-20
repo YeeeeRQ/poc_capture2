@@ -6,6 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::Result;
+use chrono::Local;
 use eframe::egui;
 
 mod app;
@@ -15,8 +16,10 @@ mod settings_window;
 mod tray;
 #[cfg(windows)]
 mod windows_window;
+mod worker;
 
 use crate::app::CaptureApp;
+use crate::worker::{spawn_worker, WorkerState};
 use settings::Settings;
 
 fn main() -> Result<()> {
@@ -35,12 +38,29 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let quit_flag = Arc::new(AtomicBool::new(false));
-    let quit_for_app = Arc::clone(&quit_flag);
+    let session_folder = std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(format!("capture_{}", Local::now().format("%Y%m%d_%H%M%S")));
 
-    tray::setup_tray(quit_for_app.clone());
+    if let Err(e) = std::fs::create_dir_all(&session_folder) {
+        log::error!("Failed to create session folder: {}", e);
+    } else {
+        log::info!("Session folder: {}", session_folder.display());
+    }
 
     let app_settings = Settings::load();
+    let monitors = capture_core::list_monitors().unwrap_or_default();
+
+    let quit_flag = Arc::new(AtomicBool::new(false));
+
+    let worker_state = WorkerState::new(session_folder.clone(), app_settings.clone());
+    spawn_worker(worker_state);
+
+    tray::setup_tray(
+        Arc::clone(&quit_flag),
+        session_folder.clone(),
+        monitors.clone(),
+    );
 
     let primary = capture_core::get_primary_monitor_rect()
         .map(|r| (r.x, r.y, r.width, r.height))
@@ -65,6 +85,8 @@ fn main() -> Result<()> {
             )),
         ..Default::default()
     };
+
+    let quit_for_app = Arc::clone(&quit_flag);
 
     eframe::run_native(
         "Capture",
@@ -109,10 +131,7 @@ fn main() -> Result<()> {
 
             cc.egui_ctx.set_fonts(fonts);
 
-            Ok(Box::new(CaptureApp::new(
-                quit_for_app.clone(),
-                app_settings.clone(),
-            )))
+            Ok(Box::new(CaptureApp::new(quit_for_app.clone())))
         }),
     )
     .map_err(|e| anyhow::anyhow!("GUI error: {}", e))?;

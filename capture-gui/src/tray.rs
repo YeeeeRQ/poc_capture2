@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -15,6 +16,11 @@ pub struct TrayState {
     pub screenshot_flag: Arc<AtomicBool>,
     pub recording_toggle_flag: Arc<AtomicBool>,
     pub show_window_flag: Arc<AtomicBool>,
+    pub session_folder: PathBuf,
+    pub is_recording: Arc<AtomicBool>,
+    pub monitors: Arc<std::sync::Mutex<Vec<capture_core::MonitorInfo>>>,
+    pub selected_monitor: Arc<std::sync::atomic::AtomicUsize>,
+    pub record_start: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 struct TrayStateInner {
@@ -22,24 +28,43 @@ struct TrayStateInner {
     screenshot_flag: Arc<AtomicBool>,
     recording_toggle_flag: Arc<AtomicBool>,
     show_window_flag: Arc<AtomicBool>,
+    session_folder: PathBuf,
+    is_recording: Arc<AtomicBool>,
+    monitors: Arc<std::sync::Mutex<Vec<capture_core::MonitorInfo>>>,
+    selected_monitor: Arc<std::sync::atomic::AtomicUsize>,
+    record_start: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 pub fn get_tray_state() -> Option<TrayState> {
-    TRAY_STATE.get().map(|inner| TrayState {
-        quit_flag: Arc::clone(&inner.quit_flag),
-        screenshot_flag: Arc::clone(&inner.screenshot_flag),
-        recording_toggle_flag: Arc::clone(&inner.recording_toggle_flag),
-        show_window_flag: Arc::clone(&inner.show_window_flag),
+    TRAY_STATE.get().map(|state| TrayState {
+        quit_flag: Arc::clone(&state.quit_flag),
+        screenshot_flag: Arc::clone(&state.screenshot_flag),
+        recording_toggle_flag: Arc::clone(&state.recording_toggle_flag),
+        show_window_flag: Arc::clone(&state.show_window_flag),
+        session_folder: state.session_folder.clone(),
+        is_recording: Arc::clone(&state.is_recording),
+        monitors: Arc::clone(&state.monitors),
+        selected_monitor: Arc::clone(&state.selected_monitor),
+        record_start: Arc::clone(&state.record_start),
     })
 }
 
 impl TrayState {
-    pub fn new(quit_flag: Arc<AtomicBool>) -> Self {
+    pub fn new(
+        quit_flag: Arc<AtomicBool>,
+        session_folder: PathBuf,
+        monitors: Vec<capture_core::MonitorInfo>,
+    ) -> Self {
         Self {
             quit_flag,
             screenshot_flag: Arc::new(AtomicBool::new(false)),
             recording_toggle_flag: Arc::new(AtomicBool::new(false)),
             show_window_flag: Arc::new(AtomicBool::new(false)),
+            session_folder,
+            is_recording: Arc::new(AtomicBool::new(false)),
+            monitors: Arc::new(std::sync::Mutex::new(monitors)),
+            selected_monitor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            record_start: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -57,23 +82,19 @@ impl TrayState {
 }
 
 #[cfg(windows)]
-pub fn setup_tray(quit_flag: Arc<AtomicBool>) {
-    let state = TrayState::new(Arc::clone(&quit_flag));
+pub fn setup_tray(
+    quit_flag: Arc<AtomicBool>,
+    session_folder: PathBuf,
+    monitors: Vec<capture_core::MonitorInfo>,
+) {
+    let state = TrayState::new(Arc::clone(&quit_flag), session_folder, monitors);
 
-    let inner = TrayStateInner {
-        quit_flag: Arc::clone(&state.quit_flag),
-        screenshot_flag: Arc::clone(&state.screenshot_flag),
-        recording_toggle_flag: Arc::clone(&state.recording_toggle_flag),
-        show_window_flag: Arc::clone(&state.show_window_flag),
-    };
-    TRAY_STATE.set(inner).ok();
-
-    let show_window_flag = Arc::clone(&state.show_window_flag);
+    let quit_flag_clone = Arc::clone(&state.quit_flag);
     let screenshot_flag = Arc::clone(&state.screenshot_flag);
     let recording_toggle_flag = Arc::clone(&state.recording_toggle_flag);
-    let quit_flag_clone = Arc::clone(&state.quit_flag);
+    let show_window_flag = Arc::clone(&state.show_window_flag);
+    let show_window_flag_for_menu = Arc::clone(&state.show_window_flag);
 
-    let show_flag_for_tray = Arc::clone(&show_window_flag);
     TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
         if let TrayIconEvent::Click {
             button: tray_icon::MouseButton::Left,
@@ -82,29 +103,26 @@ pub fn setup_tray(quit_flag: Arc<AtomicBool>) {
         } = event
         {
             log::info!("[Tray] Left click");
-            show_flag_for_tray.store(true, Ordering::SeqCst);
+            show_window_flag.store(true, Ordering::SeqCst);
         }
     }));
 
-    let show_flag_for_menu = Arc::clone(&show_window_flag);
-    let screenshot_flag_for_menu = Arc::clone(&screenshot_flag);
-    let record_flag_for_menu = Arc::clone(&recording_toggle_flag);
-    let quit_flag_for_menu = Arc::clone(&quit_flag_clone);
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-        log::info!("[Tray] Menu: {}", event.id.as_ref());
-        match event.id.as_ref() {
+        let id_str = event.id.as_ref();
+        log::info!("[Tray] Menu event: {}", id_str);
+        match id_str {
             "show" => {
-                show_flag_for_menu.store(true, Ordering::SeqCst);
+                show_window_flag_for_menu.store(true, Ordering::SeqCst);
             }
             "screenshot" => {
-                screenshot_flag_for_menu.store(true, Ordering::SeqCst);
+                screenshot_flag.store(true, Ordering::SeqCst);
             }
             "record" => {
-                record_flag_for_menu.store(true, Ordering::SeqCst);
+                recording_toggle_flag.store(true, Ordering::SeqCst);
             }
             "quit" => {
-                log::info!("[Tray] Quit");
-                quit_flag_for_menu.store(true, Ordering::SeqCst);
+                log::info!("[Tray] Quit requested");
+                quit_flag_clone.store(true, Ordering::SeqCst);
             }
             _ => {}
         }
@@ -133,6 +151,20 @@ pub fn setup_tray(quit_flag: Arc<AtomicBool>) {
         .expect("Failed to create tray icon");
 
     Box::leak(Box::new(tray));
+
+    let inner = TrayStateInner {
+        quit_flag: Arc::clone(&state.quit_flag),
+        screenshot_flag: Arc::clone(&state.screenshot_flag),
+        recording_toggle_flag: Arc::clone(&state.recording_toggle_flag),
+        show_window_flag: Arc::clone(&state.show_window_flag),
+        session_folder: state.session_folder.clone(),
+        is_recording: Arc::clone(&state.is_recording),
+        monitors: Arc::clone(&state.monitors),
+        selected_monitor: Arc::clone(&state.selected_monitor),
+        record_start: Arc::clone(&state.record_start),
+    };
+    TRAY_STATE.set(inner).ok();
+    log::info!("[Tray] Tray icon setup complete");
 }
 
 #[cfg(windows)]
@@ -170,6 +202,6 @@ fn create_fallback_icon() -> tray_icon::Icon {
 }
 
 #[cfg(not(windows))]
-pub fn setup_tray(_quit_flag: Arc<AtomicBool>) {
+pub fn setup_tray(_quit_flag: Arc<AtomicBool>, _session_folder: PathBuf) {
     log::warn!("[Tray] System tray is only supported on Windows");
 }

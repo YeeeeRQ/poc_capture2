@@ -81,17 +81,58 @@ capture-cli record -m 0 --fps 30 --duration 10
 The GUI is a frameless floating toolbar:
 
 - **Monitor selector** — choose which display to capture
-- **FPS control** — drag to set target framerate (1–120 fps)
 - **Screenshot button** — capture the selected monitor
 - **Record / Stop button** — toggle recording
 - **Pin button** — toggle always-on-top
-- **Close button** — hides the window (process keeps running)
+- **Settings button** — open settings panel
+- **Close button** — hides the window (process keeps running in system tray)
 
-The FPS control is hidden during recording. Recording timer shows elapsed time.
+### System Tray
+
+When the window is closed, the app continues running in the system tray:
+
+**Tray Menu:**
+- **显示窗口 (Show Window)** — restore the floating toolbar
+- **截图 (Screenshot)** — capture current screen
+- **开始录制 (Start Recording)** — begin recording
+- **退出 (Quit)** — exit the application
+
+**Left-click** on tray icon: Show window
+
+**Session Folder Cleanup:** If you quit without taking any screenshots or recordings, the auto-generated session folder is automatically deleted.
 
 ---
 
 ## Architecture
+
+### GUI Architecture
+
+The GUI uses a state-driven architecture with a background worker thread:
+
+```
+[Tray Events] ──► [TrayState flags] ──► [Worker Thread]
+                                               │
+                                    ┌──────────┼──────────┐
+                                    ▼          ▼          ▼
+                              [Screenshot] [Recording] [Cleanup]
+                                    │          │          │
+                                    ▼          ▼          ▼
+                              [Session Folder]      [Delete if empty]
+```
+
+**Key Components:**
+
+| Component | Responsibility |
+|-----------|----------------|
+| `app.rs` | UI rendering only (reads state, sends viewport commands) |
+| `tray.rs` | System tray + event handlers (set flags only) |
+| `worker.rs` | Background worker thread (executes screenshot/recording/cleanup) |
+
+**Why This Architecture?**
+
+- **Window hidden = UI thread paused**: egui's `update()` stops when window is hidden
+- **Worker thread runs independently**: Even when the window is hidden, screenshot/recording/quit still work
+- **No blocking**: Tray handlers only set atomic flags, never block the event loop
 
 ### Recording Thread Model
 
@@ -110,13 +151,13 @@ The FPS control is hidden during recording. Recording timer shows elapsed time.
 │ thread   │  │ thread   │  │ thread (in-rec)  │
 │          │  │          │  │                  │
 │ DXGI     │  │ FFmpeg   │  │ Poll request →  │
-│ callback │──│ stdin    │  │ read snapshot → │
+│ callback │──│ stdin    │  │ read snapshot →  │
 │          │  │          │  │ encode → write   │
 └──────────┘  └──────────┘  └──────────────────┘
      │               │
      ▼               ▼
   channel        .mp4 file
- (bounded=2)
+(bounded=2)
 ```
 
 ### Capture Thread (DXGI)
@@ -139,7 +180,7 @@ When a recording is active, the screenshot uses the **active capture session** v
 
 ```
 User clicks screenshot
-  └── RecorderHandle::take_screenshot() [non-blocking, < 1ms]
+  └── Worker reads tray_state.screenshot_flag
         └── set screenshot_request + notify_one()
 
 Screenshot thread (independent polling)
@@ -194,6 +235,8 @@ frame_rx.recv_timeout(100ms)
 - **Non-blocking screenshot** — `take_screenshot()` returns immediately; encoding runs on an independent thread; GUI is never blocked
 - **Double-buffered snapshot** — capture thread atomically updates `snapshot_buffer`; screenshot thread reads without locking `&mut self`, eliminating deadlocks between GUI and capture threads
 - **Encoder drains channel on exit** — no frame loss at end of recording
+- **State-driven UI** — UI reads from shared `TrayState`, never owns recording/cleanup logic
+- **Worker thread runs always** — independent of window visibility, ensures tray commands work even when hidden
 
 ---
 
@@ -206,6 +249,7 @@ frame_rx.recv_timeout(100ms)
 | Image encoding | [image](https://crates.io/crates/image) crate (PNG, BMP, JPEG) |
 | Video encoding | FFmpeg libx264 (H.264) |
 | GUI framework | [eframe/egui](https://crates.io/crates/egui) |
+| System tray | [tray-icon](https://crates.io/crates/tray-icon) |
 | CLI | [clap v4](https://crates.io/crates/clap) |
 | Threading | [crossbeam](https://crates.io/crates/crossbeam) + parking_lot |
 
@@ -223,9 +267,9 @@ This project uses [YeeeeRQ/windows-capture](https://github.com/YeeeeRQ/windows-c
 
 ```
 capture-gui.exe    # GUI (~42MB, embedded fonts)
-capture-cli.exe    # CLI (~1.2MB)
-ffmpeg.exe         # FFmpeg static build
-ffprobe.exe        # FFprobe
+capture-cli.exe   # CLI (~1.2MB)
+ffmpeg.exe        # FFmpeg static build
+ffprobe.exe       # FFprobe
 ```
 
 No runtime installation required.
@@ -286,13 +330,56 @@ capture-cli record -m 0 --fps 30 --duration 10
 GUI 是一个无边框浮动工具条，支持：
 
 - 显示器选择
-- FPS 调节（录制时隐藏）
 - 截图
 - 录制/停止
 - 置顶切换
-- 关闭（隐藏窗口，进程继续运行）
+- 设置面板
+- 关闭（隐藏窗口，进程继续在系统托盘运行）
+
+### 系统托盘
+
+关闭窗口后，应用会在系统托盘继续运行：
+
+**托盘菜单：**
+- **显示窗口** — 显示浮动工具条
+- **截图** — 捕获当前屏幕
+- **开始录制** — 开始录屏
+- **退出** — 退出应用
+
+**左键点击**托盘图标：显示窗口
+
+**Session 文件夹清理：** 如果退出前没有进行任何截图或录屏操作，自动生成的 session 文件夹会被自动删除。
 
 ### 架构设计
+
+#### GUI 架构
+
+GUI 采用状态驱动的架构，包含后台 worker 线程：
+
+```
+[托盘事件] ──► [TrayState 标志位] ──► [Worker 线程]
+                                              │
+                                   ┌──────────┼──────────┐
+                                   ▼          ▼          ▼
+                             [截图]    [录屏]    [清理]
+                                   │          │          │
+                                   ▼          ▼          ▼
+                             [Session 文件夹]    [空则删除]
+```
+
+**核心组件：**
+
+| 组件 | 职责 |
+|------|------|
+| `app.rs` | 仅负责 UI 渲染（读取状态，发送 viewport 命令） |
+| `tray.rs` | 系统托盘 + 事件处理（仅设置标志位） |
+| `worker.rs` | 后台 worker 线程（执行截图/录屏/清理） |
+
+**为什么这样设计？**
+
+- **窗口隐藏 = UI 线程暂停**：egui 的 `update()` 在窗口隐藏时停止
+- **Worker 线程独立运行**：即使窗口隐藏，截图/录屏/退出仍然有效
+- **无阻塞**：托盘处理器只设置原子标志位，不阻塞事件循环
 
 #### 录屏线程模型
 
@@ -317,7 +404,7 @@ GUI 是一个无边框浮动工具条，支持：
      │               │
      ▼               ▼
   channel        .mp4 文件
- (bounded=2)
+(bounded=2)
 ```
 
 #### 截图架构
@@ -326,7 +413,7 @@ GUI 是一个无边框浮动工具条，支持：
 
 ```
 用户点击截图
-  └── RecorderHandle::take_screenshot() [非阻塞，< 1ms]
+  └── Worker 读取 tray_state.screenshot_flag
         └── 设置 screenshot_request + notify_one()
 
 独立轮询的截图线程
@@ -377,6 +464,8 @@ frame_rx.recv_timeout(100ms)
 - **非阻塞截图** — `take_screenshot()` 立即返回；编码在独立线程运行；GUI 永不阻塞
 - **双缓冲快照** — capture 线程原子更新 `snapshot_buffer`；截图线程读取时无需锁定 `&mut self`，消除 GUI 与 capture 线程之间的死锁
 - **编码器退出时排空 channel** — 录制结束时无帧丢失
+- **状态驱动 UI** — UI 从共享 `TrayState` 读取状态，不拥有录屏/清理逻辑
+- **Worker 线程常驻运行** — 独立于窗口可见性，确保托盘命令在窗口隐藏时仍然有效
 
 ### 技术栈
 
@@ -387,6 +476,7 @@ frame_rx.recv_timeout(100ms)
 | 图片编码 | [image](https://crates.io/crates/image) crate (PNG, BMP, JPEG) |
 | 视频编码 | FFmpeg libx264 (H.264) |
 | GUI 框架 | [eframe/egui](https://crates.io/crates/egui) |
+| 系统托盘 | [tray-icon](https://crates.io/crates/tray-icon) |
 | CLI | [clap v4](https://crates.io/crates/clap) |
 | 线程 | [crossbeam](https://crates.io/crates/crossbeam) + parking_lot |
 

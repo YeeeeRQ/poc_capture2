@@ -1,8 +1,20 @@
+use capture_core::MonitorInfo;
 use eframe::egui;
 
 use crate::app::CaptureApp;
 
-pub fn show(ctx: &egui::Context, app: &mut CaptureApp, bg: egui::Color32, txt: egui::Color32) {
+pub fn show(
+    ctx: &egui::Context,
+    app: &mut CaptureApp,
+    bg: egui::Color32,
+    txt: egui::Color32,
+    is_recording: bool,
+    timer_text: String,
+    monitors: Vec<MonitorInfo>,
+    selected_monitor: usize,
+) {
+    let mut selected = selected_monitor;
+
     egui::CentralPanel::default()
         .frame(egui::Frame {
             fill: egui::Color32::TRANSPARENT,
@@ -37,8 +49,8 @@ pub fn show(ctx: &egui::Context, app: &mut CaptureApp, bg: egui::Color32, txt: e
 
                         let record_icon = ui.selectable_label(
                             false,
-                            egui::RichText::new(if app.is_recording { "⏺" } else { "📷" })
-                                .color(if app.is_recording {
+                            egui::RichText::new(if is_recording { "⏺" } else { "📷" })
+                                .color(if is_recording {
                                     egui::Color32::from_rgb(255, 100, 100)
                                 } else {
                                     egui::Color32::from_rgb(100, 220, 120)
@@ -48,8 +60,8 @@ pub fn show(ctx: &egui::Context, app: &mut CaptureApp, bg: egui::Color32, txt: e
 
                         egui::ComboBox::from_id_salt("mon")
                             .selected_text({
-                                if app.selected_monitor < app.monitors.len() {
-                                    let m = &app.monitors[app.selected_monitor];
+                                if selected < monitors.len() {
+                                    let m = &monitors[selected];
                                     format!("[{}] {}", m.index, m.name)
                                 } else {
                                     "Unknown".to_string()
@@ -57,9 +69,9 @@ pub fn show(ctx: &egui::Context, app: &mut CaptureApp, bg: egui::Color32, txt: e
                             })
                             .width(160.0)
                             .show_ui(ui, |ui| {
-                                for m in &app.monitors {
+                                for m in &monitors {
                                     ui.selectable_value(
-                                        &mut app.selected_monitor,
+                                        &mut selected,
                                         m.index,
                                         format!(
                                             "[{}] {} ({}x{})",
@@ -69,8 +81,16 @@ pub fn show(ctx: &egui::Context, app: &mut CaptureApp, bg: egui::Color32, txt: e
                                 }
                             });
 
+                        if selected != selected_monitor {
+                            if let Some(tray_state) = crate::tray::get_tray_state() {
+                                tray_state
+                                    .selected_monitor
+                                    .store(selected, std::sync::atomic::Ordering::SeqCst);
+                            }
+                        }
+
                         ui.label(
-                            egui::RichText::new(app.timer_text())
+                            egui::RichText::new(timer_text)
                                 .color(egui::Color32::WHITE)
                                 .size(14.0)
                                 .strong(),
@@ -91,21 +111,21 @@ pub fn show(ctx: &egui::Context, app: &mut CaptureApp, bg: egui::Color32, txt: e
                         );
                         if screenshot_btn.clicked() {
                             log::info!("[MainWindow] Screenshot clicked");
-                            app.screenshot();
+                            if let Some(tray_state) = crate::tray::get_tray_state() {
+                                tray_state
+                                    .screenshot_flag
+                                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                            }
                         }
 
                         let record_btn = ui.add_sized(
                             [56.0, 28.0],
                             egui::Button::new(
-                                egui::RichText::new(if app.is_recording {
-                                    "停止"
-                                } else {
-                                    "录制"
-                                })
-                                .color(egui::Color32::WHITE)
-                                .size(12.0),
+                                egui::RichText::new(if is_recording { "停止" } else { "录制" })
+                                    .color(egui::Color32::WHITE)
+                                    .size(12.0),
                             )
-                            .fill(if app.is_recording {
+                            .fill(if is_recording {
                                 egui::Color32::from_rgb(220, 70, 70)
                             } else {
                                 egui::Color32::from_rgb(200, 50, 50)
@@ -114,9 +134,13 @@ pub fn show(ctx: &egui::Context, app: &mut CaptureApp, bg: egui::Color32, txt: e
                         if record_btn.clicked() {
                             log::info!(
                                 "[MainWindow] Record clicked, is_recording={}",
-                                app.is_recording
+                                is_recording
                             );
-                            app.toggle_recording();
+                            if let Some(tray_state) = crate::tray::get_tray_state() {
+                                tray_state
+                                    .recording_toggle_flag
+                                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                            }
                         }
 
                         let pin_bg = if app.is_pinned {
