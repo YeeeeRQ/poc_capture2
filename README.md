@@ -170,13 +170,22 @@ Worker thread                      Main thread (app update loop)
      ├── send_menu_update(Started)        │
      │                                    │
      │                          ◄─────────┤
+     │                          Timer Wakeup Thread
+     │                          (InvalidateRect → WM_PAINT)
+     │                                    │
+     │                                    ▼
      │                          poll pending
      │                          set_menu(new_menu)
 ```
 
-**Problem**: `tray-icon`'s `TrayIcon` contains `Rc<RefCell<...>>`, which is not thread-safe. Cannot update tray menu directly from worker thread.
+**Problem**: 
+1. `tray-icon`'s `TrayIcon` contains `Rc<RefCell<...>>`, not thread-safe
+2. egui's `update()` only runs when the Windows message loop is active
 
-**Solution**: Pending updates + main thread polling.
+**Solution**: 
+- Pending update pattern for thread-safe menu updates
+- Timer Wakeup Thread (100ms) sends `InvalidateRect` to trigger `WM_PAINT`
+- This ensures `update()` runs regularly even when window is in background
 
 **Key Components:**
 
@@ -188,6 +197,7 @@ Worker thread                      Main thread (app update loop)
 | `get_pending_menu_update()` | `tray.rs` | Called by main thread to poll pending updates |
 | `ThreadSafeTrayIconPtr` | `tray.rs` | Wrapper for `TrayIcon` pointer with `Send + Sync` |
 | `update_tray_menu_from_main_thread()` | `tray.rs` | Rebuilds menu and calls `set_menu()` |
+| `spawn_timer_wakeup_thread()` | `timer_wakeup.rs` | Periodically wakes up message loop via `InvalidateRect` |
 
 **Initialization Order**: `setup_tray()` must be called **before** `spawn_worker()` to ensure `PENDING_MENU_UPDATE` is initialized before the worker thread starts.
 
