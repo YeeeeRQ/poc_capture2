@@ -25,6 +25,18 @@ pub struct TrayState {
     pub selected_monitor: Arc<std::sync::atomic::AtomicUsize>,
     pub record_start: Arc<Mutex<Option<std::time::Instant>>>,
     pub handle: Arc<Mutex<Option<RecorderHandle>>>,
+    pub hwnd: Arc<std::sync::atomic::AtomicIsize>,
+    pub window_state: Arc<Mutex<WindowState>>,
+}
+
+#[derive(Clone, Default)]
+pub struct WindowState {
+    pub width: f32,
+    pub height: f32,
+    pub x: i32,
+    pub y: i32,
+    pub is_maximized: bool,
+    pub is_minimized: bool,
 }
 
 struct TrayStateInner {
@@ -38,6 +50,8 @@ struct TrayStateInner {
     selected_monitor: Arc<std::sync::atomic::AtomicUsize>,
     record_start: Arc<Mutex<Option<std::time::Instant>>>,
     handle: Arc<Mutex<Option<RecorderHandle>>>,
+    hwnd: Arc<std::sync::atomic::AtomicIsize>,
+    window_state: Arc<Mutex<WindowState>>,
 }
 
 pub fn get_tray_state() -> Option<TrayState> {
@@ -52,6 +66,8 @@ pub fn get_tray_state() -> Option<TrayState> {
         selected_monitor: Arc::clone(&state.selected_monitor),
         record_start: Arc::clone(&state.record_start),
         handle: Arc::clone(&state.handle),
+        hwnd: Arc::clone(&state.hwnd),
+        window_state: Arc::clone(&state.window_state),
     })
 }
 
@@ -72,6 +88,8 @@ impl TrayState {
             selected_monitor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             record_start: Arc::new(Mutex::new(None)),
             handle: Arc::new(Mutex::new(None)),
+            hwnd: Arc::new(std::sync::atomic::AtomicIsize::new(0)),
+            window_state: Arc::new(Mutex::new(WindowState::default())),
         }
     }
 
@@ -170,6 +188,8 @@ pub fn setup_tray(
         selected_monitor: Arc::clone(&state.selected_monitor),
         record_start: Arc::clone(&state.record_start),
         handle: Arc::clone(&state.handle),
+        hwnd: Arc::clone(&state.hwnd),
+        window_state: Arc::clone(&state.window_state),
     };
     TRAY_STATE.set(inner).ok();
     log::info!("[Tray] Tray icon setup complete");

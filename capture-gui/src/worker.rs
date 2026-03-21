@@ -65,6 +65,17 @@ pub fn spawn_worker(state: WorkerState) {
                     std::process::exit(0);
                 }
 
+                if tray_state.show_window_flag.swap(false, Ordering::SeqCst) {
+                    log::info!("[Worker] Show window requested");
+                    let hwnd = tray_state.hwnd.load(Ordering::SeqCst);
+                    if hwnd != 0 {
+                        let state = tray_state.window_state.lock().clone();
+                        crate::windows_window::show_window(hwnd, &state);
+                    } else {
+                        log::warn!("[Worker] HWND not yet available");
+                    }
+                }
+
                 if tray_state.screenshot_flag.swap(false, Ordering::SeqCst) {
                     log::info!("[Worker] Screenshot requested");
                     let monitors = tray_state.monitors.lock();

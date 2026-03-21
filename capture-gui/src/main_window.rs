@@ -200,8 +200,21 @@ pub fn show(
                             .fill(egui::Color32::from_rgb(220, 70, 70)),
                         );
                         if close_btn.clicked() {
-                            log::info!("[MainWindow] Close clicked, hiding window");
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                            log::info!(
+                                "[MainWindow] Close clicked, saving window state and hiding"
+                            );
+                            if let Some(tray_state) = crate::tray::get_tray_state() {
+                                let hwnd =
+                                    tray_state.hwnd.load(std::sync::atomic::Ordering::SeqCst);
+                                if hwnd != 0 {
+                                    if let Some(state) =
+                                        crate::windows_window::save_window_state(hwnd)
+                                    {
+                                        *tray_state.window_state.lock() = state;
+                                    }
+                                    crate::windows_window::hide_window(hwnd);
+                                }
+                            }
                         }
 
                         let drag_rect = record_icon.rect.expand(4.0);

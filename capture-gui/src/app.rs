@@ -20,6 +20,8 @@ pub struct CaptureApp {
     settings_was_open: bool,
     pub main_viewport_rect: Option<egui::Rect>,
     window_rounded: bool,
+    hwnd_saved: bool,
+    last_saved_rect: Option<egui::Rect>,
     pub shared_settings: Arc<RwLock<Settings>>,
 }
 
@@ -36,6 +38,8 @@ impl CaptureApp {
             settings_was_open: false,
             main_viewport_rect: None,
             window_rounded: false,
+            hwnd_saved: false,
+            last_saved_rect: None,
             shared_settings,
         }
     }
@@ -83,15 +87,57 @@ impl eframe::App for CaptureApp {
         }
 
         if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
+            let position_changed = self
+                .main_viewport_rect
+                .map(|r| r.min.x != rect.min.x || r.min.y != rect.min.y)
+                .unwrap_or(true);
+
             self.main_viewport_rect = Some(rect);
 
             #[cfg(windows)]
             {
-                if !self.window_rounded {
-                    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                    if let Ok(handle) = frame.window_handle() {
-                        if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
-                            let hwnd = win32_handle.hwnd.get() as isize;
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = frame.window_handle() {
+                    if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+                        let hwnd = win32_handle.hwnd.get() as isize;
+
+                        if !self.hwnd_saved {
+                            if let Some(tray_state) = crate::tray::get_tray_state() {
+                                tray_state.hwnd.store(hwnd, Ordering::SeqCst);
+                                log::info!("[App] HWND saved to TrayState: {}", hwnd);
+                            }
+                            self.hwnd_saved = true;
+                        }
+
+                        if position_changed {
+                            if let Some(tray_state) = crate::tray::get_tray_state() {
+                                let scale_factor = ctx
+                                    .input(|i| i.viewport().native_pixels_per_point.unwrap_or(1.0));
+                                let width = (rect.max.x - rect.min.x) * scale_factor;
+                                let height = (rect.max.y - rect.min.y) * scale_factor;
+                                let x = rect.min.x as i32;
+                                let y = rect.min.y as i32;
+                                let new_state = crate::tray::WindowState {
+                                    width,
+                                    height,
+                                    x,
+                                    y,
+                                    is_maximized: false,
+                                    is_minimized: false,
+                                };
+                                *tray_state.window_state.lock() = new_state;
+                                self.last_saved_rect = Some(rect);
+                                log::info!(
+                                    "[App] Window position updated: pos=({},{}), size=({}x{})",
+                                    x,
+                                    y,
+                                    width,
+                                    height
+                                );
+                            }
+                        }
+
+                        if !self.window_rounded {
                             let scale_factor =
                                 ctx.input(|i| i.viewport().native_pixels_per_point.unwrap_or(1.0));
                             let width = ((rect.max.x - rect.min.x) * scale_factor) as i32;
