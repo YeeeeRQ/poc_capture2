@@ -16,6 +16,11 @@ extern "system" {
     fn IsWindowVisible(hwnd: isize) -> i32;
     fn SetActiveWindow(hwnd: isize) -> isize;
     fn SetFocus(hwnd: isize) -> isize;
+    fn SetForegroundWindow(hwnd: isize) -> i32;
+    fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
+    fn GetWindowThreadProcessId(hwnd: isize, lpdwProcessId: *mut u32) -> u32;
+    fn GetCurrentThreadId() -> u32;
+    fn ShowOwnedPopups(hwnd: isize, fShow: i32) -> i32;
 }
 
 #[cfg(windows)]
@@ -180,12 +185,10 @@ pub fn show_window(hwnd: isize, state: &crate::tray::WindowState) {
 
     unsafe {
         let is_visible = IsWindowVisible(hwnd) != 0;
-        if is_visible {
-            log::info!("[WindowsWindow] Window is already visible, skipping show");
-            return;
-        }
 
-        ShowWindow(hwnd, SW_SHOW);
+        if !is_visible {
+            ShowWindow(hwnd, SW_SHOW);
+        }
 
         let mut placement = WINDOWPLACEMENT {
             length: WINDOWPLACEMENT_LENGTH,
@@ -210,11 +213,27 @@ pub fn show_window(hwnd: isize, state: &crate::tray::WindowState) {
         }
 
         SetWindowPlacement(hwnd, &placement);
+
+        let mut flags: u32 = 0;
+        let current_thread = GetCurrentThreadId();
+        let window_thread = GetWindowThreadProcessId(hwnd, &mut flags);
+
+        if current_thread != window_thread {
+            AttachThreadInput(window_thread, current_thread, 1);
+        }
+
+        ShowOwnedPopups(hwnd, 1);
+        SetForegroundWindow(hwnd);
         SetActiveWindow(hwnd);
         SetFocus(hwnd);
+
+        if current_thread != window_thread {
+            AttachThreadInput(window_thread, current_thread, 0);
+        }
+
         log::info!(
-            "[WindowsWindow] Window shown via Windows API: pos=({},{}), size=({}x{}), maximized={}, minimized={}",
-            state.x, state.y, state.width, state.height, state.is_maximized, state.is_minimized
+            "[WindowsWindow] Window shown via Windows API: pos=({},{}), size=({}x{}), maximized={}, minimized={}, was_visible={}",
+            state.x, state.y, state.width, state.height, state.is_maximized, state.is_minimized, is_visible
         );
     }
 }
