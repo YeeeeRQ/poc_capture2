@@ -373,9 +373,3 @@ ffprobe.exe       # FFprobe
 ```
 
 No runtime installation required.
-
----
-
-## Screenshots
-
-See the [screenshots](screenshots/) directory for preview images.

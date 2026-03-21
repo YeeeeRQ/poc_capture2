@@ -373,9 +373,3 @@ ffprobe.exe        # FFprobe
 ```
 
 仅需以上四个文件，无需安装任何运行时。
-
----
-
-## 截图预览
-
-详见 [screenshots](screenshots/) 目录。
