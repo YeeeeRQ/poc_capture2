@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Local;
+use parking_lot::RwLock;
 
 use capture_core::{take_screenshot, RecordSettings, RecorderHandle, ScreenshotSettings};
 
@@ -12,11 +13,11 @@ use crate::settings::Settings;
 pub struct WorkerState {
     pub session_folder: PathBuf,
     pub session_has_content: Arc<AtomicBool>,
-    pub settings: Settings,
+    pub settings: Arc<RwLock<Settings>>,
 }
 
 impl WorkerState {
-    pub fn new(session_folder: PathBuf, settings: Settings) -> Self {
+    pub fn new(session_folder: PathBuf, settings: Arc<RwLock<Settings>>) -> Self {
         Self {
             session_folder,
             session_has_content: Arc::new(AtomicBool::new(false)),
@@ -71,7 +72,8 @@ pub fn spawn_worker(state: WorkerState) {
                     if selected >= monitors.len() {
                         log::warn!("[Worker] Invalid monitor selected");
                     } else {
-                        let ext = settings.screenshot_format.clone();
+                        let s = settings.read();
+                        let ext = s.screenshot_format.clone();
                         let path = session_folder.join(format!(
                             "screenshot_{}.{}",
                             Local::now().format("%Y%m%d_%H%M%S"),
@@ -85,8 +87,8 @@ pub fn spawn_worker(state: WorkerState) {
                                 monitor_index: selected,
                                 output_path: Some(path.clone()),
                                 format: ext,
-                                quality: settings.screenshot_quality,
-                                draw_border: settings.draw_border,
+                                quality: s.screenshot_quality,
+                                draw_border: s.draw_border,
                             }) {
                                 Ok(p) => {
                                     session_has_content.store(true, Ordering::SeqCst);
@@ -116,6 +118,7 @@ pub fn spawn_worker(state: WorkerState) {
                         if selected >= monitors.len() {
                             log::warn!("[Worker] Invalid monitor selected");
                         } else {
+                            let s = settings.read();
                             let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
                             let output_path =
                                 session_folder.join(format!("capture_{}.mp4", timestamp));
@@ -124,9 +127,9 @@ pub fn spawn_worker(state: WorkerState) {
                                 monitor_index: selected,
                                 output_path: Some(output_path),
                                 duration_secs: None,
-                                target_fps: settings.fps,
+                                target_fps: s.fps,
                                 preset: "medium".to_string(),
-                                draw_border: settings.draw_border,
+                                draw_border: s.draw_border,
                             };
 
                             match RecorderHandle::start(record_settings) {

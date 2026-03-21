@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use eframe::egui;
+use parking_lot::RwLock;
 
 use crate::settings::{Settings, FORMAT_OPTIONS, QUALITY_OPTIONS};
 
@@ -16,6 +17,7 @@ pub fn show(
     settings_open: &Arc<AtomicBool>,
     settings_loaded: &Option<Settings>,
     main_viewport_rect: &Option<egui::Rect>,
+    shared_settings: &Arc<RwLock<Settings>>,
 ) {
     if !settings_open.load(Ordering::SeqCst) {
         return;
@@ -40,6 +42,7 @@ pub fn show(
     let settings_open = Arc::clone(settings_open);
     let local_settings = Arc::new(parking_lot::Mutex::new(settings_loaded.clone()));
     let local_settings_for_sync = Arc::clone(&local_settings);
+    let shared_settings = Arc::clone(shared_settings);
 
     ctx.show_viewport_deferred(
         *SETTINGS_VIEWPORT_ID,
@@ -251,6 +254,7 @@ pub fn show(
                                     if let Err(e) = s.save() {
                                         log::error!("Failed to save settings: {}", e);
                                     }
+                                    *shared_settings.write() = s.clone();
                                     drop(s);
                                     SETTINGS_ROUNDED.store(false, Ordering::SeqCst);
                                     settings_open.store(false, Ordering::SeqCst);

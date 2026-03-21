@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use chrono::Local;
 use eframe::egui;
+use parking_lot::RwLock;
 
 mod app;
 mod main_window;
@@ -53,7 +54,10 @@ fn main() -> Result<()> {
 
     let quit_flag = Arc::new(AtomicBool::new(false));
 
-    let worker_state = WorkerState::new(session_folder.clone(), app_settings.clone());
+    let shared_settings = Arc::new(RwLock::new(app_settings));
+    let worker_settings = Arc::clone(&shared_settings);
+
+    let worker_state = WorkerState::new(session_folder.clone(), worker_settings);
     spawn_worker(worker_state);
 
     tray::setup_tray(
@@ -87,6 +91,7 @@ fn main() -> Result<()> {
     };
 
     let quit_for_app = Arc::clone(&quit_flag);
+    let shared_settings_for_app = Arc::clone(&shared_settings);
 
     eframe::run_native(
         "Capture",
@@ -131,7 +136,10 @@ fn main() -> Result<()> {
 
             cc.egui_ctx.set_fonts(fonts);
 
-            Ok(Box::new(CaptureApp::new(quit_for_app.clone())))
+            Ok(Box::new(CaptureApp::new(
+                quit_for_app.clone(),
+                shared_settings_for_app.clone(),
+            )))
         }),
     )
     .map_err(|e| anyhow::anyhow!("GUI error: {}", e))?;

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
+use parking_lot::RwLock;
 
 use crate::main_window;
 use crate::settings::Settings;
@@ -18,10 +19,11 @@ pub struct CaptureApp {
     settings_was_open: bool,
     pub main_viewport_rect: Option<egui::Rect>,
     window_rounded: bool,
+    pub shared_settings: Arc<RwLock<Settings>>,
 }
 
 impl CaptureApp {
-    pub fn new(quit_flag: Arc<AtomicBool>) -> Self {
+    pub fn new(quit_flag: Arc<AtomicBool>, shared_settings: Arc<RwLock<Settings>>) -> Self {
         Self {
             is_pinned: true,
             quit_flag,
@@ -32,6 +34,7 @@ impl CaptureApp {
             settings_was_open: false,
             main_viewport_rect: None,
             window_rounded: false,
+            shared_settings,
         }
     }
 }
@@ -123,6 +126,7 @@ impl eframe::App for CaptureApp {
             &self.settings_open,
             &self.settings_loaded,
             &self.main_viewport_rect,
+            &self.shared_settings,
         );
 
         main_window::show(
