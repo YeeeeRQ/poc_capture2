@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use eframe::egui;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::settings::{Settings, FORMAT_OPTIONS, QUALITY_OPTIONS};
 
@@ -15,18 +15,13 @@ static SETTINGS_ROUNDED: std::sync::LazyLock<Arc<AtomicBool>> =
 pub fn show(
     ctx: &egui::Context,
     settings_open: &Arc<AtomicBool>,
-    settings_loaded: &Option<Settings>,
+    settings_local: &Arc<Mutex<Settings>>,
     main_viewport_rect: &Option<egui::Rect>,
     shared_settings: &Arc<RwLock<Settings>>,
 ) {
     if !settings_open.load(Ordering::SeqCst) {
         return;
     }
-
-    let settings_loaded = match settings_loaded {
-        Some(s) => s,
-        None => return,
-    };
 
     let settings_h = 340.0_f32;
     let settings_w = 260.0_f32;
@@ -40,8 +35,7 @@ pub fn show(
     };
 
     let settings_open = Arc::clone(settings_open);
-    let local_settings = Arc::new(parking_lot::Mutex::new(settings_loaded.clone()));
-    let local_settings_for_sync = Arc::clone(&local_settings);
+    let local_settings_for_ui = Arc::clone(settings_local);
     let shared_settings = Arc::clone(shared_settings);
 
     ctx.show_viewport_deferred(
@@ -57,7 +51,7 @@ pub fn show(
             let label_col = egui::Color32::from_rgb(180, 180, 190);
             let header_col = egui::Color32::from_rgb(100, 220, 120);
             let separator_col = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20);
-            let settings = Arc::clone(&local_settings_for_sync);
+            let settings = Arc::clone(&local_settings_for_ui);
 
             egui::CentralPanel::default()
                 .frame(

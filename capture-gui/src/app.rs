@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::main_window;
 use crate::settings::Settings;
@@ -16,6 +16,7 @@ pub struct CaptureApp {
     screenshot_loading_pending: Arc<AtomicBool>,
     pub settings_open: Arc<AtomicBool>,
     settings_loaded: Option<Settings>,
+    settings_local: Option<Arc<Mutex<Settings>>>,
     settings_was_open: bool,
     pub main_viewport_rect: Option<egui::Rect>,
     window_rounded: bool,
@@ -31,6 +32,7 @@ impl CaptureApp {
             screenshot_loading_pending: Arc::new(AtomicBool::new(false)),
             settings_open: Arc::new(AtomicBool::new(false)),
             settings_loaded: None,
+            settings_local: None,
             settings_was_open: false,
             main_viewport_rect: None,
             window_rounded: false,
@@ -114,20 +116,26 @@ impl eframe::App for CaptureApp {
 
         if self.settings_was_open && !self.settings_open.load(Ordering::SeqCst) {
             self.settings_loaded = None;
+            self.settings_local = None;
         }
         self.settings_was_open = self.settings_open.load(Ordering::SeqCst);
 
-        if self.settings_open.load(Ordering::SeqCst) && self.settings_loaded.is_none() {
+        if self.settings_open.load(Ordering::SeqCst) && self.settings_local.is_none() {
             self.settings_loaded = Some(Settings::load());
+            self.settings_local = Some(Arc::new(Mutex::new(
+                self.settings_loaded.as_ref().unwrap().clone(),
+            )));
         }
 
-        settings_window::show(
-            ctx,
-            &self.settings_open,
-            &self.settings_loaded,
-            &self.main_viewport_rect,
-            &self.shared_settings,
-        );
+        if let Some(ref local) = self.settings_local {
+            settings_window::show(
+                ctx,
+                &self.settings_open,
+                local,
+                &self.main_viewport_rect,
+                &self.shared_settings,
+            );
+        }
 
         main_window::show(
             ctx,
