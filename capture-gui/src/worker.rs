@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 use chrono::Local;
 use parking_lot::RwLock;
 
-use capture_core::{take_screenshot, RecordSettings, RecorderHandle, ScreenshotSettings};
+use capture_core::{
+    take_screenshot, PerfStats, RecordSettings, RecorderHandle, ScreenshotSettings,
+};
 
 use crate::settings::Settings;
 
@@ -14,14 +16,20 @@ pub struct WorkerState {
     pub session_folder: PathBuf,
     pub session_has_content: Arc<AtomicBool>,
     pub settings: Arc<RwLock<Settings>>,
+    pub perf_stats: Option<Arc<PerfStats>>,
 }
 
 impl WorkerState {
-    pub fn new(session_folder: PathBuf, settings: Arc<RwLock<Settings>>) -> Self {
+    pub fn new(
+        session_folder: PathBuf,
+        settings: Arc<RwLock<Settings>>,
+        perf_stats: Option<Arc<PerfStats>>,
+    ) -> Self {
         Self {
             session_folder,
             session_has_content: Arc::new(AtomicBool::new(false)),
             settings,
+            perf_stats,
         }
     }
 }
@@ -30,6 +38,7 @@ pub fn spawn_worker(state: WorkerState) {
     let session_folder = state.session_folder.clone();
     let session_has_content = Arc::clone(&state.session_has_content);
     let settings = state.settings;
+    let perf_stats = state.perf_stats;
 
     std::thread::spawn(move || {
         log::info!("[Worker] Worker thread started");
@@ -137,7 +146,7 @@ pub fn spawn_worker(state: WorkerState) {
                                 draw_border: s.draw_border,
                             };
 
-                            match RecorderHandle::start(record_settings) {
+                            match RecorderHandle::start(record_settings, perf_stats.clone()) {
                                 Ok((handle, _jh)) => {
                                     *tray_state.handle.lock() = Some(handle);
                                     tray_state.is_recording.store(true, Ordering::SeqCst);

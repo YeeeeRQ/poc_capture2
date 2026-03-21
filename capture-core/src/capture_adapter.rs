@@ -7,6 +7,7 @@ use crossbeam::channel;
 use image::ImageEncoder;
 use parking_lot::Mutex;
 
+use crate::PerfStats;
 use windows_capture::{
     capture::{CaptureControl, Context as WinCtx, GraphicsCaptureApiHandler},
     frame::Frame,
@@ -52,6 +53,7 @@ pub struct CaptureSettings {
     pub draw_border: bool,
     pub frame_tx: Option<channel::Sender<EncodedFrame>>,
     pub done_tx: Option<std::sync::mpsc::Sender<()>>,
+    pub perf_stats: Option<Arc<PerfStats>>,
 }
 
 #[derive(Clone)]
@@ -78,6 +80,7 @@ pub struct CaptureState {
     pub frame_tx: Option<channel::Sender<EncodedFrame>>,
     pub done_tx: Option<std::sync::mpsc::Sender<()>>,
     pub snapshot_buffer: Arc<Mutex<Vec<u8>>>,
+    pub perf_stats: Option<Arc<PerfStats>>,
 }
 
 impl Default for CaptureState {
@@ -94,6 +97,7 @@ impl Default for CaptureState {
             frame_tx: None,
             done_tx: None,
             snapshot_buffer: Arc::new(Mutex::new(Vec::new())),
+            perf_stats: None,
         }
     }
 }
@@ -107,6 +111,7 @@ impl CaptureHandler {
     pub fn setup(&mut self, settings: CaptureSettings) {
         self.state.frame_tx = settings.frame_tx.clone();
         self.state.done_tx = settings.done_tx.clone();
+        self.state.perf_stats = settings.perf_stats.clone();
         self.settings = settings;
         self.state.start_time = Some(Instant::now());
         if let Some(dur) = self.settings.duration_secs {
@@ -174,6 +179,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 draw_border: false,
                 frame_tx: None,
                 done_tx: None,
+                perf_stats: None,
             },
             state: CaptureState::default(),
         })
@@ -214,7 +220,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let bgra = fb.as_nopadding_buffer()?;
         let copy_len = bgra.len().min(frame_size);
 
+        let convert_start = Instant::now();
         bgra_to_rgba_inplace(&bgra[..copy_len], &mut self.state.rgba_buffer[..frame_size]);
+        let convert_elapsed = convert_start.elapsed().as_millis() as u64;
 
         let timestamp = self
             .state
@@ -222,11 +230,16 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             .map(|s| s.elapsed())
             .unwrap_or_default();
 
+        let alloc_start = Instant::now();
+        let frame_data = self.state.rgba_buffer[..frame_size].to_vec();
+        let alloc_elapsed = alloc_start.elapsed().as_millis() as u64;
+
         let frame = EncodedFrame {
-            data: self.state.rgba_buffer[..frame_size].to_vec(),
+            data: frame_data,
             timestamp,
         };
 
+        let send_start = Instant::now();
         if let Some(ref tx) = self.state.frame_tx {
             if tx.send(frame).is_err() {
                 log::warn!("Frame channel send failed (encoder thread died)");
@@ -234,6 +247,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 self.state.frame_count.fetch_add(1, Ordering::Relaxed);
             }
         }
+        let send_elapsed = send_start.elapsed().as_millis() as u64;
 
         let total = timestamp;
         *self.state.total_elapsed.lock() = total;
@@ -261,9 +275,21 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             }
         }
 
+        let snap_start = Instant::now();
         {
             let mut snap = self.state.snapshot_buffer.lock();
             *snap = self.state.rgba_buffer[..frame_size].to_vec();
+        }
+        let snap_elapsed = snap_start.elapsed().as_millis() as u64;
+
+        if let Some(ref stats) = self.state.perf_stats {
+            stats.record_capture(
+                alloc_elapsed,
+                convert_elapsed,
+                send_elapsed,
+                snap_elapsed,
+                frame_size as u64,
+            );
         }
 
         Ok(())
@@ -397,6 +423,7 @@ pub fn build_capture_settings(
         draw_border: settings.draw_border,
         frame_tx: None,
         done_tx: None,
+        perf_stats: None,
     }
 }
 

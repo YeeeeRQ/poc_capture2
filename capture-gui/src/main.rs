@@ -22,12 +22,18 @@ mod worker;
 
 use crate::app::CaptureApp;
 use crate::worker::{spawn_worker, WorkerState};
+use capture_core::PerfStats;
 use settings::Settings;
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format_timestamp_millis()
         .init();
+
+    let perf_sampling = env::args().any(|arg| arg == "--perf-sampling");
+    if perf_sampling {
+        log::info!("[Main] Performance sampling enabled");
+    }
 
     if let Some(idx) = env::args().position(|arg| arg == "--dxgi-diagnostic") {
         let output_file = env::args().nth(idx + 1);
@@ -58,7 +64,9 @@ fn main() -> Result<()> {
     let shared_settings = Arc::new(RwLock::new(app_settings));
     let worker_settings = Arc::clone(&shared_settings);
 
-    let worker_state = WorkerState::new(session_folder.clone(), worker_settings);
+    let perf_stats = Some(Arc::new(PerfStats::new()));
+
+    let worker_state = WorkerState::new(session_folder.clone(), worker_settings, perf_stats);
 
     tray::setup_tray(
         Arc::clone(&quit_flag),
