@@ -58,13 +58,14 @@ fn main() -> Result<()> {
     let worker_settings = Arc::clone(&shared_settings);
 
     let worker_state = WorkerState::new(session_folder.clone(), worker_settings);
-    spawn_worker(worker_state);
 
     tray::setup_tray(
         Arc::clone(&quit_flag),
         session_folder.clone(),
         monitors.clone(),
     );
+
+    spawn_worker(worker_state);
 
     let primary = capture_core::get_primary_monitor_rect()
         .map(|r| (r.x, r.y, r.width, r.height))

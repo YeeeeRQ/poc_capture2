@@ -136,6 +136,61 @@ The GUI uses a state-driven architecture with a background worker thread:
 - **Worker thread runs independently**: Even when the window is hidden, screenshot/recording/quit still work
 - **No blocking**: Tray handlers only set atomic flags, never block the event loop
 
+### Window Management
+
+The GUI window uses a **state-driven architecture** with Windows API for show/hide control:
+
+```
+[Close button] ──► save_window_state() ──► ShowWindow(SW_HIDE)
+[Tray left-click] ──► show_window() ──► ShowWindow + SetWindowPlacement + SetForegroundWindow
+```
+
+**Problem**: egui's `ViewportCommand::Visible(false)` stops working after the window is shown via Windows API.
+
+**Solution**: Worker thread directly calls Windows API to show/hide window, bypassing egui's limitations.
+
+**Key Components:**
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| `WindowState` | `tray.rs` | Stores window position, size, maximized/minimized state |
+| `show_window()` | `windows_window.rs` | Show window with saved state + activate + bring to foreground |
+| `hide_window()` | `windows_window.rs` | Hide window via `ShowWindow(SW_HIDE)` |
+| `save_window_state()` | `windows_window.rs` | Save current window state before hiding |
+
+**Thread Safety**: Window operations use `AttachThreadInput` + `SetForegroundWindow` + `SetActiveWindow` + `SetFocus` to reliably activate and bring the window to foreground.
+
+### Tray Menu Update
+
+The tray menu uses a **pending update pattern** to handle cross-thread updates:
+
+```
+Worker thread                      Main thread (app update loop)
+     │                                    │
+     ├── send_menu_update(Started)        │
+     │                                    │
+     │                          ◄─────────┤
+     │                          poll pending
+     │                          set_menu(new_menu)
+```
+
+**Problem**: `tray-icon`'s `TrayIcon` contains `Rc<RefCell<...>>`, which is not thread-safe. Cannot update tray menu directly from worker thread.
+
+**Solution**: Pending updates + main thread polling.
+
+**Key Components:**
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| `TrayMenuUpdate` | `tray.rs` | Enum: `RecordingStarted`, `RecordingStopped` |
+| `PENDING_MENU_UPDATE` | `tray.rs` | Stores pending menu update request |
+| `send_menu_update()` | `tray.rs` | Called by worker thread to request menu update |
+| `get_pending_menu_update()` | `tray.rs` | Called by main thread to poll pending updates |
+| `ThreadSafeTrayIconPtr` | `tray.rs` | Wrapper for `TrayIcon` pointer with `Send + Sync` |
+| `update_tray_menu_from_main_thread()` | `tray.rs` | Rebuilds menu and calls `set_menu()` |
+
+**Initialization Order**: `setup_tray()` must be called **before** `spawn_worker()` to ensure `PENDING_MENU_UPDATE` is initialized before the worker thread starts.
+
 ### Recording Thread Model
 
 ```
@@ -239,6 +294,8 @@ frame_rx.recv_timeout(100ms)
 - **Encoder drains channel on exit** — no frame loss at end of recording
 - **State-driven UI** — UI reads from shared `TrayState`, never owns recording/cleanup logic
 - **Worker thread runs always** — independent of window visibility, ensures tray commands work even when hidden
+- **Windows API for window show/hide** — directly call Windows API (`ShowWindow`, `SetWindowPlacement`) to control window visibility, bypassing egui's limitation where `ViewportCommand` stops working after window is hidden
+- **Pending update pattern for tray menu** — worker thread sets a pending flag; main thread polls and calls `set_menu()` to rebuild the entire menu, solving the thread-safety issue with `tray-icon`'s `Rc<RefCell<...>>`
 
 ---
 

@@ -123,6 +123,9 @@ pub fn spawn_worker(state: WorkerState) {
                         }
                         tray_state.is_recording.store(false, Ordering::SeqCst);
                         tray_state.record_start.lock().take();
+                        crate::tray::send_menu_update(
+                            crate::tray::TrayMenuUpdate::RecordingStopped,
+                        );
                     } else {
                         let monitors = tray_state.monitors.lock();
                         let selected = tray_state.selected_monitor.load(Ordering::SeqCst);
@@ -149,6 +152,9 @@ pub fn spawn_worker(state: WorkerState) {
                                     tray_state.is_recording.store(true, Ordering::SeqCst);
                                     *tray_state.record_start.lock() = Some(Instant::now());
                                     session_has_content.store(true, Ordering::SeqCst);
+                                    crate::tray::send_menu_update(
+                                        crate::tray::TrayMenuUpdate::RecordingStarted,
+                                    );
                                     log::info!("[Worker] Recording started");
                                 }
                                 Err(e) => {

@@ -8,10 +8,41 @@ use parking_lot::Mutex;
 #[cfg(windows)]
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
-    TrayIconBuilder, TrayIconEvent,
+    TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
 
+#[cfg(windows)]
+static TRAY_ICON_PTR: std::sync::OnceLock<ThreadSafeTrayIconPtr> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+struct ThreadSafeTrayIconPtr(*mut ());
+
+#[cfg(windows)]
+unsafe impl Send for ThreadSafeTrayIconPtr {}
+
+#[cfg(windows)]
+unsafe impl Sync for ThreadSafeTrayIconPtr {}
+
+#[cfg(windows)]
+impl ThreadSafeTrayIconPtr {
+    fn new(ptr: *mut TrayIcon) -> Self {
+        ThreadSafeTrayIconPtr(ptr as *mut ())
+    }
+
+    fn as_tray_icon(&self) -> &mut TrayIcon {
+        unsafe { &mut *(self.0 as *mut TrayIcon) }
+    }
+}
+
 static TRAY_STATE: std::sync::OnceLock<TrayStateInner> = std::sync::OnceLock::new();
+
+pub enum TrayMenuUpdate {
+    RecordingStarted,
+    RecordingStopped,
+}
+
+static PENDING_MENU_UPDATE: std::sync::OnceLock<Arc<Mutex<Option<TrayMenuUpdate>>>> =
+    std::sync::OnceLock::new();
 
 #[derive(Clone)]
 pub struct TrayState {
@@ -106,6 +137,16 @@ impl TrayState {
     }
 }
 
+pub fn get_pending_menu_update() -> Option<TrayMenuUpdate> {
+    PENDING_MENU_UPDATE.get()?.lock().take()
+}
+
+pub fn send_menu_update(update: TrayMenuUpdate) {
+    if let Some(pending) = PENDING_MENU_UPDATE.get() {
+        *pending.lock() = Some(update);
+    }
+}
+
 #[cfg(windows)]
 pub fn setup_tray(
     quit_flag: Arc<AtomicBool>,
@@ -142,7 +183,10 @@ pub fn setup_tray(
             "screenshot" => {
                 screenshot_flag.store(true, Ordering::SeqCst);
             }
-            "record" => {
+            "start_record" => {
+                recording_toggle_flag.store(true, Ordering::SeqCst);
+            }
+            "stop_record" => {
                 recording_toggle_flag.store(true, Ordering::SeqCst);
             }
             "quit" => {
@@ -157,14 +201,16 @@ pub fn setup_tray(
 
     let show_item = MenuItem::with_id("show", "显示窗口", true, None);
     let screenshot_item = MenuItem::with_id("screenshot", "截图", true, None);
-    let record_item = MenuItem::with_id("record", "开始录制", true, None);
+    let start_record_item = MenuItem::with_id("start_record", "开始录制", true, None);
+    let stop_record_item = MenuItem::with_id("stop_record", "停止录制", false, None);
     let separator = PredefinedMenuItem::separator();
     let quit_item = MenuItem::with_id("quit", "退出", true, None);
 
     let menu = Menu::new();
     menu.append(&show_item).ok();
     menu.append(&screenshot_item).ok();
-    menu.append(&record_item).ok();
+    menu.append(&start_record_item).ok();
+    menu.append(&stop_record_item).ok();
     menu.append(&separator).ok();
     menu.append(&quit_item).ok();
 
@@ -176,7 +222,10 @@ pub fn setup_tray(
         .build()
         .expect("Failed to create tray icon");
 
-    Box::leak(Box::new(tray));
+    let tray_ptr = Box::into_raw(Box::new(tray));
+    TRAY_ICON_PTR.set(ThreadSafeTrayIconPtr::new(tray_ptr)).ok();
+
+    PENDING_MENU_UPDATE.set(Arc::new(Mutex::new(None))).ok();
 
     let inner = TrayStateInner {
         quit_flag: Arc::clone(&state.quit_flag),
@@ -233,4 +282,31 @@ fn create_fallback_icon() -> tray_icon::Icon {
 #[cfg(not(windows))]
 pub fn setup_tray(_quit_flag: Arc<AtomicBool>, _session_folder: PathBuf) {
     log::warn!("[Tray] System tray is only supported on Windows");
+}
+
+#[cfg(windows)]
+pub fn update_tray_menu_from_main_thread(is_recording: bool) {
+    if let Some(ptr) = TRAY_ICON_PTR.get() {
+        let tray = ptr.as_tray_icon();
+        let show_item = MenuItem::with_id("show", "显示窗口", true, None);
+        let screenshot_item = MenuItem::with_id("screenshot", "截图", true, None);
+        let start_record_item = MenuItem::with_id("start_record", "开始录制", !is_recording, None);
+        let stop_record_item = MenuItem::with_id("stop_record", "停止录制", is_recording, None);
+        let separator = PredefinedMenuItem::separator();
+        let quit_item = MenuItem::with_id("quit", "退出", true, None);
+
+        let menu = Menu::new();
+        menu.append(&show_item).ok();
+        menu.append(&screenshot_item).ok();
+        menu.append(&start_record_item).ok();
+        menu.append(&stop_record_item).ok();
+        menu.append(&separator).ok();
+        menu.append(&quit_item).ok();
+
+        tray.set_menu(Some(Box::new(menu)));
+        log::info!(
+            "[Tray] Menu updated from main thread, is_recording={}",
+            is_recording
+        );
+    }
 }

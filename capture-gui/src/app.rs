@@ -200,6 +200,11 @@ impl eframe::App for CaptureApp {
             self.screenshot_loading = false;
         }
 
+        if let Some(update) = crate::tray::get_pending_menu_update() {
+            let is_recording = matches!(update, crate::tray::TrayMenuUpdate::RecordingStarted);
+            crate::tray::update_tray_menu_from_main_thread(is_recording);
+        }
+
         ctx.request_repaint_after(Duration::from_millis(100));
     }
 }

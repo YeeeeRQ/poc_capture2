@@ -136,6 +136,61 @@ GUI 采用状态驱动的架构，包含后台 worker 线程：
 - **Worker 线程独立运行**：即使窗口隐藏，截图/录屏/退出仍然有效
 - **无阻塞**：托盘处理器只设置原子标志位，不阻塞事件循环
 
+### 窗口管理
+
+GUI 窗口使用**状态驱动架构** + Windows API 控制显示/隐藏：
+
+```
+[关闭按钮] ──► save_window_state() ──► ShowWindow(SW_HIDE)
+[托盘左键] ──► show_window() ──► ShowWindow + SetWindowPlacement + SetForegroundWindow
+```
+
+**问题**：egui 的 `ViewportCommand::Visible(false)` 在窗口通过 Windows API 显示后失效。
+
+**解决方案**：Worker 线程直接调用 Windows API 显示/隐藏窗口，绕过 egui 的限制。
+
+**核心组件：**
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `WindowState` | `tray.rs` | 存储窗口位置、大小、最大化/最小化状态 |
+| `show_window()` | `windows_window.rs` | 显示窗口并恢复状态 + 激活 + 提升到前台 |
+| `hide_window()` | `windows_window.rs` | 通过 `ShowWindow(SW_HIDE)` 隐藏窗口 |
+| `save_window_state()` | `windows_window.rs` | 隐藏前保存当前窗口状态 |
+
+**线程安全**：窗口操作使用 `AttachThreadInput` + `SetForegroundWindow` + `SetActiveWindow` + `SetFocus` 可靠地激活窗口并将其提升到前台。
+
+### 托盘菜单更新
+
+托盘菜单使用**待处理更新模式**处理跨线程更新：
+
+```
+Worker 线程                        主线程 (app update loop)
+     │                                    │
+     ├── send_menu_update(Started)        │
+     │                                    │
+     │                          ◄─────────┤
+     │                          轮询 pending
+     │                          set_menu(new_menu)
+```
+
+**问题**：`tray-icon` 的 `TrayIcon` 包含 `Rc<RefCell<...>>`，非线程安全。无法从 worker 线程直接更新托盘菜单。
+
+**解决方案**：待处理更新 + 主线程轮询。
+
+**核心组件：**
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `TrayMenuUpdate` | `tray.rs` | 枚举：`RecordingStarted`, `RecordingStopped` |
+| `PENDING_MENU_UPDATE` | `tray.rs` | 存储待处理的菜单更新请求 |
+| `send_menu_update()` | `tray.rs` | Worker 线程调用以请求菜单更新 |
+| `get_pending_menu_update()` | `tray.rs` | 主线程调用以轮询待处理更新 |
+| `ThreadSafeTrayIconPtr` | `tray.rs` | 包裹 `TrayIcon` 指针的 `Send + Sync` 包装器 |
+| `update_tray_menu_from_main_thread()` | `tray.rs` | 重建菜单并调用 `set_menu()` |
+
+**初始化顺序**：`setup_tray()` 必须在 `spawn_worker()` **之前**调用，以确保 `PENDING_MENU_UPDATE` 在 worker 线程启动前完成初始化。
+
 ### 录屏线程模型
 
 ```
@@ -239,6 +294,8 @@ frame_rx.recv_timeout(100ms)
 - **编码器退出时排空 channel** — 录制结束时无帧丢失
 - **状态驱动 UI** — UI 从共享 `TrayState` 读取状态，不拥有录屏/清理逻辑
 - **Worker 线程常驻运行** — 独立于窗口可见性，确保托盘命令在窗口隐藏时仍然有效
+- **Windows API 控制窗口显示/隐藏** — 直接调用 Windows API（`ShowWindow`、`SetWindowPlacement`）控制窗口可见性，绕过 egui 在窗口隐藏后 `ViewportCommand` 失效的限制
+- **托盘菜单待处理更新模式** — worker 线程设置待处理标志；主线程轮询并调用 `set_menu()` 重建整个菜单，解决 `tray-icon` 的 `Rc<RefCell<...>>` 线程安全问题
 
 ---
 
