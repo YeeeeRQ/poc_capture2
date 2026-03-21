@@ -191,6 +191,38 @@ Worker thread                      Main thread (app update loop)
 
 **Initialization Order**: `setup_tray()` must be called **before** `spawn_worker()` to ensure `PENDING_MENU_UPDATE` is initialized before the worker thread starts.
 
+### Timer Wakeup Thread
+
+A background thread periodically wakes up the main window's message loop to ensure responsive UI updates:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Timer Thread (100ms interval)                         │
+│      │                                                  │
+│      ├── Read hwnd from TrayState                      │
+│      │                                                  │
+│      └── InvalidateRect(hwnd, NULL, FALSE) ──► WM_PAINT │
+│                                                    │    │
+│                                          ┌──────────────┘
+│                                          ▼
+│                                   egui update() called
+│                                          │
+│                                          ▼
+│                              process pending tray menu updates
+```
+
+**Problem**: When the window is not focused, egui's `update()` only runs when the Windows message loop is active.
+
+**Solution**: `timer_wakeup` thread sends `InvalidateRect` every 100ms to force `WM_PAINT`, which triggers egui's update loop even when the window is in the background.
+
+**Key Components:**
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| `spawn_timer_wakeup_thread()` | `timer_wakeup.rs` | Start background thread that calls `InvalidateRect` |
+| `stop_timer_wakeup_thread()` | `timer_wakeup.rs` | Stop the timer thread on app exit |
+| `hwnd` | `TrayState` | Shared HWND storage, set by `app.rs` on window creation |
+
 ### Recording Thread Model
 
 ```
