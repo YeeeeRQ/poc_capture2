@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use crate::PerfStats;
 use windows_capture::{
     capture::{CaptureControl, Context as WinCtx, GraphicsCaptureApiHandler},
+    encoder::VideoEncoder,
     frame::Frame,
     graphics_capture_api::InternalCaptureControl,
     monitor::Monitor,
@@ -27,6 +28,7 @@ pub struct RecordSettings {
     pub preset: String,
     pub target_fps: u32,
     pub draw_border: bool,
+    pub bitrate: Option<u32>,
 }
 
 impl Default for RecordSettings {
@@ -38,11 +40,12 @@ impl Default for RecordSettings {
             preset: "medium".to_string(),
             target_fps: 60,
             draw_border: false,
+            bitrate: Some(15_000_000),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CaptureSettings {
     pub width: u32,
     pub height: u32,
@@ -54,6 +57,8 @@ pub struct CaptureSettings {
     pub frame_tx: Option<channel::Sender<EncodedFrame>>,
     pub done_tx: Option<std::sync::mpsc::Sender<()>>,
     pub perf_stats: Option<Arc<PerfStats>>,
+    pub video_encoder: Option<Arc<parking_lot::Mutex<Option<VideoEncoder>>>>,
+    pub encoder_bitrate: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -76,11 +81,11 @@ pub struct CaptureState {
     pub total_elapsed: Arc<Mutex<Duration>>,
     pub last_log_elapsed: Arc<Mutex<Duration>>,
     pub stop_requested: Arc<AtomicU64>,
-    pub last_sent_time: Arc<Mutex<Instant>>,
     pub frame_tx: Option<channel::Sender<EncodedFrame>>,
     pub done_tx: Option<std::sync::mpsc::Sender<()>>,
     pub snapshot_buffer: Arc<Mutex<Vec<u8>>>,
     pub perf_stats: Option<Arc<PerfStats>>,
+    pub video_encoder: Option<Arc<parking_lot::Mutex<Option<VideoEncoder>>>>,
 }
 
 impl Default for CaptureState {
@@ -93,11 +98,11 @@ impl Default for CaptureState {
             total_elapsed: Arc::new(Mutex::new(Duration::ZERO)),
             last_log_elapsed: Arc::new(Mutex::new(Duration::ZERO)),
             stop_requested: Arc::new(AtomicU64::new(0)),
-            last_sent_time: Arc::new(Mutex::new(Instant::now())),
             frame_tx: None,
             done_tx: None,
             snapshot_buffer: Arc::new(Mutex::new(Vec::new())),
             perf_stats: None,
+            video_encoder: None,
         }
     }
 }
@@ -112,6 +117,7 @@ impl CaptureHandler {
         self.state.frame_tx = settings.frame_tx.clone();
         self.state.done_tx = settings.done_tx.clone();
         self.state.perf_stats = settings.perf_stats.clone();
+        self.state.video_encoder = settings.video_encoder.clone();
         self.settings = settings;
         self.state.start_time = Some(Instant::now());
         if let Some(dur) = self.settings.duration_secs {
@@ -180,6 +186,8 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 frame_tx: None,
                 done_tx: None,
                 perf_stats: None,
+                video_encoder: None,
+                encoder_bitrate: None,
             },
             state: CaptureState::default(),
         })
@@ -190,11 +198,39 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         frame: &mut Frame,
         _control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
+        static FRAME_CALLBACK_COUNT: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        static LAST_LOG_TIME: std::sync::Mutex<Option<std::time::Instant>> =
+            std::sync::Mutex::new(None);
+
+        let count = FRAME_CALLBACK_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        let now = std::time::Instant::now();
+
+        let should_log = {
+            let mut last = LAST_LOG_TIME.lock().unwrap();
+            if last.map_or(true, |t| {
+                now.duration_since(t) >= std::time::Duration::from_secs(1)
+            }) {
+                *last = Some(now);
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_log {
+            log::warn!(
+                "[DXGI] on_frame_arrived called {} times, target_fps={}",
+                count,
+                self.settings.target_fps
+            );
+        }
+
         if self.state.stop_requested.load(Ordering::SeqCst) > 0 {
             return Ok(());
         }
 
-        if self.state.frame_tx.is_none() {
+        if self.state.frame_tx.is_none() && self.state.video_encoder.is_none() {
             return Ok(());
         }
 
@@ -202,14 +238,75 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         let height = self.settings.height as usize;
         let frame_size = width * height * 4;
 
-        let interval = Duration::from_secs_f64(1.0 / self.settings.target_fps as f64);
-        let now = Instant::now();
-        {
-            let mut last = self.state.last_sent_time.lock();
-            if now.duration_since(*last) < interval {
-                return Ok(());
+        let timestamp = self
+            .state
+            .start_time
+            .map(|s| s.elapsed())
+            .unwrap_or_default();
+
+        let send_start = Instant::now();
+        let mut send_elapsed = 0u64;
+
+        if let Some(ref encoder_arc) = self.state.video_encoder {
+            if let Some(ref mut encoder) = *encoder_arc.lock() {
+                encoder.send_frame(frame).map_err(|e| {
+                    log::error!("VideoEncoder send_frame failed: {}", e);
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                })?;
+                self.state.frame_count.fetch_add(1, Ordering::Relaxed);
+                send_elapsed = send_start.elapsed().as_millis() as u64;
+                if let Some(ref stats) = self.state.perf_stats {
+                    stats.record_encode(send_elapsed);
+                }
             }
-            *last = now;
+        } else if let Some(ref tx) = self.state.frame_tx {
+            if self.state.rgba_buffer.len() < frame_size {
+                self.state.rgba_buffer.resize(frame_size, 0);
+            }
+
+            let mut fb = frame.buffer()?;
+            let bgra = fb.as_nopadding_buffer()?;
+            let copy_len = bgra.len().min(frame_size);
+
+            bgra_to_rgba_inplace(&bgra[..copy_len], &mut self.state.rgba_buffer[..frame_size]);
+
+            let frame_data = self.state.rgba_buffer[..frame_size].to_vec();
+            let frame = EncodedFrame {
+                data: frame_data,
+                timestamp,
+            };
+
+            if tx.send(frame).is_err() {
+                log::warn!("Frame channel send failed (encoder thread died)");
+            } else {
+                self.state.frame_count.fetch_add(1, Ordering::Relaxed);
+            }
+            send_elapsed = send_start.elapsed().as_millis() as u64;
+        }
+
+        *self.state.total_elapsed.lock() = timestamp;
+
+        let last_log = *self.state.last_log_elapsed.lock();
+        if timestamp.saturating_sub(last_log) >= Duration::from_secs(1) {
+            *self.state.last_log_elapsed.lock() = timestamp;
+            let written = self.state.frame_count.load(Ordering::Relaxed);
+            let fps = if timestamp.as_secs_f64() > 0.0 {
+                written as f64 / timestamp.as_secs_f64()
+            } else {
+                0.0
+            };
+            log::debug!(
+                "[{}s] Written={} fps={:.1}",
+                format_f64(timestamp.as_secs_f64(), 1),
+                written,
+                fps,
+            );
+        }
+
+        if let Some(max) = self.state.duration {
+            if timestamp >= max {
+                self.request_stop();
+            }
         }
 
         if self.state.rgba_buffer.len() < frame_size {
@@ -224,63 +321,14 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         bgra_to_rgba_inplace(&bgra[..copy_len], &mut self.state.rgba_buffer[..frame_size]);
         let convert_elapsed = convert_start.elapsed().as_millis() as u64;
 
-        let timestamp = self
-            .state
-            .start_time
-            .map(|s| s.elapsed())
-            .unwrap_or_default();
-
-        let alloc_start = Instant::now();
-        let frame_data = self.state.rgba_buffer[..frame_size].to_vec();
-        let alloc_elapsed = alloc_start.elapsed().as_millis() as u64;
-
-        let frame = EncodedFrame {
-            data: frame_data,
-            timestamp,
-        };
-
-        let send_start = Instant::now();
-        if let Some(ref tx) = self.state.frame_tx {
-            if tx.send(frame).is_err() {
-                log::warn!("Frame channel send failed (encoder thread died)");
-            } else {
-                self.state.frame_count.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        let send_elapsed = send_start.elapsed().as_millis() as u64;
-
-        let total = timestamp;
-        *self.state.total_elapsed.lock() = total;
-
-        let last_log = *self.state.last_log_elapsed.lock();
-        if total.saturating_sub(last_log) >= Duration::from_secs(1) {
-            *self.state.last_log_elapsed.lock() = total;
-            let written = self.state.frame_count.load(Ordering::Relaxed);
-            let fps = if total.as_secs_f64() > 0.0 {
-                written as f64 / total.as_secs_f64()
-            } else {
-                0.0
-            };
-            log::debug!(
-                "[{}s] Written={} fps={:.1}",
-                format_f64(total.as_secs_f64(), 1),
-                written,
-                fps,
-            );
-        }
-
-        if let Some(max) = self.state.duration {
-            if total >= max {
-                self.request_stop();
-            }
-        }
-
         let snap_start = Instant::now();
         {
             let mut snap = self.state.snapshot_buffer.lock();
             *snap = self.state.rgba_buffer[..frame_size].to_vec();
         }
         let snap_elapsed = snap_start.elapsed().as_millis() as u64;
+
+        let alloc_elapsed = 0u64;
 
         if let Some(ref stats) = self.state.perf_stats {
             stats.record_capture(
@@ -424,6 +472,8 @@ pub fn build_capture_settings(
         frame_tx: None,
         done_tx: None,
         perf_stats: None,
+        video_encoder: None,
+        encoder_bitrate: None,
     }
 }
 
@@ -435,10 +485,15 @@ pub fn start_capture(
     windows_capture::capture::GraphicsCaptureApiError<Box<dyn std::error::Error + Send + Sync>>,
 > {
     let min_interval = if capture_settings.target_fps > 0 {
-        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(
-            1.0 / capture_settings.target_fps as f64,
-        ))
+        let interval_secs = 1.0 / capture_settings.target_fps as f64;
+        log::info!(
+            "[Capture] Target FPS: {}, Min interval: {:.3}ms",
+            capture_settings.target_fps,
+            interval_secs * 1000.0
+        );
+        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(interval_secs))
     } else {
+        log::info!("[Capture] Using system default update interval");
         MinimumUpdateIntervalSettings::Default
     };
 
@@ -457,5 +512,6 @@ pub fn start_capture(
         capture_settings,
     );
 
+    log::info!("[Capture] Starting free-threaded capture...");
     CaptureHandler::start_free_threaded(settings)
 }

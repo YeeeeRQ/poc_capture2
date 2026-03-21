@@ -144,6 +144,7 @@ pub fn spawn_worker(state: WorkerState) {
                                 target_fps: s.fps,
                                 preset: "medium".to_string(),
                                 draw_border: s.draw_border,
+                                bitrate: None,
                             };
 
                             match RecorderHandle::start(record_settings, perf_stats.clone()) {

@@ -125,6 +125,7 @@ fn main() -> Result<()> {
                 target_fps: args.fps,
                 preset: args.preset,
                 draw_border: args.border,
+                bitrate: None,
             };
 
             println!(
@@ -146,7 +147,7 @@ fn main() -> Result<()> {
 }
 
 fn start_recording_cli(settings: RecordSettings) -> Result<std::path::PathBuf> {
-    let (handle, join_handle) = RecorderHandle::start(settings)?;
+    let (handle, join_handle) = RecorderHandle::start(settings, None)?;
 
     let res = join_handle
         .join()

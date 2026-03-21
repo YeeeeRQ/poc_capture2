@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossbeam::channel;
 use parking_lot::{Condvar, Mutex};
 use std::sync::atomic::AtomicBool;
@@ -15,6 +15,9 @@ use super::capture_adapter::{
 use super::perf_sampler::{PerfSampler, PerfSamplerHandle};
 use super::perf_stats::PerfStats;
 use windows_capture::capture::CaptureControl;
+use windows_capture::encoder::{
+    AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
+};
 
 pub struct RecorderHandle {
     control: Option<
@@ -33,6 +36,7 @@ pub struct RecorderHandle {
     screenshot_request: Arc<Mutex<Option<ScreenshotRequest>>>,
     screenshot_done: Arc<Condvar>,
     perf_sampler: Option<PerfSamplerHandle>,
+    video_encoder: Option<Arc<parking_lot::Mutex<Option<VideoEncoder>>>>,
 }
 
 impl RecorderHandle {
@@ -56,7 +60,6 @@ impl RecorderHandle {
         let output_path = capture_settings.output_path.clone();
         let output_path_for_encoder = output_path.clone();
         let target_fps = settings.target_fps;
-        let preset = settings.preset.clone();
 
         let perf_sampler = if let Some(ref stats) = perf_stats {
             let csv_path = output_path
@@ -86,12 +89,11 @@ impl RecorderHandle {
 
         let sampler_clone = perf_sampler.clone();
 
-        let (frame_tx, frame_rx): (
+        let (frame_tx, _frame_rx): (
             channel::Sender<EncodedFrame>,
             channel::Receiver<EncodedFrame>,
         ) = channel::bounded(2);
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let done_tx_for_encoder = done_tx.clone();
+        let (done_tx, _done_rx) = std::sync::mpsc::channel();
         let done_tx_for_setup = done_tx.clone();
 
         let stop_flag: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
@@ -103,61 +105,33 @@ impl RecorderHandle {
         let screenshot_join_handle: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> =
             Arc::new(Mutex::new(None));
 
-        let encoder_join = {
-            let stop_flag = Arc::clone(&stop_flag);
-            std::thread::Builder::new()
-                .name("encoder".to_string())
-                .spawn(move || {
-                    let mut enc = match crate::encoder::FfmpegEncoder::new(
+        let video_encoder: Option<Arc<parking_lot::Mutex<Option<VideoEncoder>>>> = {
+            let bitrate = settings.bitrate.unwrap_or(15_000_000);
+            let video_settings = VideoSettingsBuilder::new(width, height)
+                .bitrate(bitrate)
+                .frame_rate(target_fps);
+
+            match VideoEncoder::new(
+                video_settings,
+                AudioSettingsBuilder::default().disabled(true),
+                ContainerSettingsBuilder::default(),
+                &output_path_for_encoder,
+            ) {
+                Ok(enc) => {
+                    log::info!(
+                        "[Recorder] VideoEncoder created: {}x{} @ {} fps, bitrate={}",
                         width,
                         height,
-                        &output_path_for_encoder,
-                        &preset,
                         target_fps,
-                    ) {
-                        Ok(e) => e,
-                        Err(e) => {
-                            log::error!("Failed to create encoder: {}", e);
-                            let _ = done_tx_for_encoder.send(());
-                            return;
-                        }
-                    };
-
-                    let start_time = Instant::now();
-                    let mut last_log = Duration::ZERO;
-
-                    loop {
-                        match frame_rx.recv_timeout(Duration::from_millis(100)) {
-                            Ok(frame) => {
-                                if enc.write_frame(&frame.data).is_err() {
-                                    break;
-                                }
-                                let elapsed = start_time.elapsed();
-                                if elapsed.saturating_sub(last_log) >= Duration::from_secs(1) {
-                                    last_log = elapsed;
-                                    log::debug!(
-                                        "[{}s] encoder fps={:.1}",
-                                        format_f64(elapsed.as_secs_f64(), 1),
-                                        enc.frames_written() as f64
-                                            / elapsed.as_secs_f64().max(0.001)
-                                    );
-                                }
-                            }
-                            Err(channel::RecvTimeoutError::Timeout) => {
-                                if done_rx.try_recv().is_ok() || *stop_flag.lock() {
-                                    let _ = enc.finish();
-                                    break;
-                                }
-                            }
-                            Err(channel::RecvTimeoutError::Disconnected) => {
-                                let _ = enc.finish();
-                                break;
-                            }
-                        }
-                    }
-                    let _ = done_tx_for_encoder.send(());
-                })
-                .context("Failed to spawn encoder thread")?
+                        bitrate
+                    );
+                    Some(Arc::new(parking_lot::Mutex::new(Some(enc))))
+                }
+                Err(e) => {
+                    log::error!("[Recorder] Failed to create VideoEncoder: {}", e);
+                    None
+                }
+            }
         };
 
         let control = {
@@ -165,6 +139,7 @@ impl RecorderHandle {
             cap_settings.frame_tx = Some(frame_tx.clone());
             cap_settings.done_tx = None;
             cap_settings.perf_stats = perf_stats.clone();
+            cap_settings.video_encoder = video_encoder.clone();
 
             super::capture_adapter::start_capture(monitor, cap_settings)
                 .map_err(|e| anyhow::anyhow!("Failed to start capture: {}", e))?
@@ -177,6 +152,7 @@ impl RecorderHandle {
             setup_settings.frame_tx = Some(frame_tx);
             setup_settings.done_tx = Some(done_tx_for_setup);
             setup_settings.perf_stats = perf_stats.clone();
+            setup_settings.video_encoder = video_encoder.clone();
             handler.setup(setup_settings);
             Arc::clone(&handler.state.snapshot_buffer)
         };
@@ -241,13 +217,15 @@ impl RecorderHandle {
         let ss_stopped = Arc::clone(&screenshot_stopped);
         let ss_done = Arc::clone(&screenshot_done);
         let ss_jh = Arc::clone(&screenshot_join_handle);
+        let video_encoder_clone = video_encoder.clone();
+        let callback_clone = callback.clone();
 
         let perf_stats_clone = perf_stats.clone();
 
         let join_handle = std::thread::spawn(move || {
             loop {
                 if *stop_flag_clone.lock() {
-                    callback.lock().request_stop();
+                    callback_clone.lock().request_stop();
                     break;
                 }
 
@@ -270,7 +248,17 @@ impl RecorderHandle {
                 let _ = jh.join();
             }
 
-            let _ = encoder_join.join();
+            if let Some(ref enc_arc) = video_encoder_clone {
+                if let Some(enc) = enc_arc.lock().take() {
+                    log::info!("[Recorder] Finishing VideoEncoder...");
+                    if let Err(e) = enc.finish() {
+                        log::error!("[Recorder] VideoEncoder finish failed: {}", e);
+                    } else {
+                        log::info!("[Recorder] VideoEncoder finished successfully");
+                    }
+                }
+            }
+
             *done_flag_clone.lock() = true;
             done_condvar_clone.notify_one();
 
@@ -330,6 +318,7 @@ impl RecorderHandle {
                 screenshot_stopped,
                 screenshot_join_handle,
                 perf_sampler: perf_sampler.clone(),
+                video_encoder,
             },
             join_handle,
         ))
