@@ -172,6 +172,7 @@ pub fn setup_tray(
         .with_icon(icon)
         .with_tooltip("Capture")
         .with_menu(Box::new(menu))
+        .with_menu_on_left_click(false)
         .build()
         .expect("Failed to create tray icon");
 
