@@ -12,7 +12,7 @@ use windows_capture::{
     capture::{CaptureControl, Context as WinCtx, GraphicsCaptureApiHandler},
     encoder::VideoEncoder,
     frame::Frame,
-    graphics_capture_api::InternalCaptureControl,
+    graphics_capture_api::{GraphicsCaptureApi, InternalCaptureControl},
     monitor::Monitor,
     settings::{
         ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
@@ -491,6 +491,22 @@ pub fn start_capture(
             capture_settings.target_fps,
             interval_secs * 1000.0
         );
+
+        match GraphicsCaptureApi::is_minimum_update_interval_supported() {
+            Ok(true) => {
+                log::info!("[Capture] MinimumUpdateInterval is supported on this system");
+            }
+            Ok(false) => {
+                log::warn!("[Capture] MinimumUpdateInterval is NOT supported on this system");
+            }
+            Err(e) => {
+                log::warn!(
+                    "[Capture] Failed to check MinimumUpdateInterval support: {}",
+                    e
+                );
+            }
+        }
+
         MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(interval_secs))
     } else {
         log::info!("[Capture] Using system default update interval");
