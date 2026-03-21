@@ -184,9 +184,17 @@ pub fn setup_tray(
                 screenshot_flag.store(true, Ordering::SeqCst);
             }
             "start_record" => {
+                log::info!(
+                    "[Tray] Start record clicked at {:?}",
+                    std::time::Instant::now()
+                );
                 recording_toggle_flag.store(true, Ordering::SeqCst);
             }
             "stop_record" => {
+                log::info!(
+                    "[Tray] Stop record clicked at {:?}",
+                    std::time::Instant::now()
+                );
                 recording_toggle_flag.store(true, Ordering::SeqCst);
             }
             "quit" => {
@@ -305,7 +313,8 @@ pub fn update_tray_menu_from_main_thread(is_recording: bool) {
 
         tray.set_menu(Some(Box::new(menu)));
         log::info!(
-            "[Tray] Menu updated from main thread, is_recording={}",
+            "[Tray] Menu updated at {:?}, is_recording={}",
+            std::time::Instant::now(),
             is_recording
         );
     }

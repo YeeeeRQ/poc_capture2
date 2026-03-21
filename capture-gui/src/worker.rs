@@ -76,24 +76,24 @@ pub fn spawn_worker(state: WorkerState) {
                     }
                 }
 
-                if tray_state.screenshot_flag.swap(false, Ordering::SeqCst) {
-                    log::info!("[Worker] Screenshot requested");
-                    let monitors = tray_state.monitors.lock();
-                    let selected = tray_state.selected_monitor.load(Ordering::SeqCst);
-                    if selected >= monitors.len() {
-                        log::warn!("[Worker] Invalid monitor selected");
-                    } else {
-                        let s = settings.read();
-                        let ext = s.screenshot_format.clone();
-                        let path = session_folder.join(format!(
-                            "screenshot_{}.{}",
-                            Local::now().format("%Y%m%d_%H%M%S"),
-                            ext
-                        ));
+                let is_recording = tray_state.is_recording.load(Ordering::SeqCst);
 
-                        if tray_state.is_recording.load(Ordering::SeqCst) {
-                            log::info!("[Worker] Screenshot during recording - not implemented");
+                if !is_recording {
+                    if tray_state.screenshot_flag.swap(false, Ordering::SeqCst) {
+                        log::info!("[Worker] Screenshot requested");
+                        let monitors = tray_state.monitors.lock();
+                        let selected = tray_state.selected_monitor.load(Ordering::SeqCst);
+                        if selected >= monitors.len() {
+                            log::warn!("[Worker] Invalid monitor selected");
                         } else {
+                            let s = settings.read();
+                            let ext = s.screenshot_format.clone();
+                            let path = session_folder.join(format!(
+                                "screenshot_{}.{}",
+                                Local::now().format("%Y%m%d_%H%M%S"),
+                                ext
+                            ));
+
                             match take_screenshot(&ScreenshotSettings {
                                 monitor_index: selected,
                                 output_path: Some(path.clone()),
@@ -109,24 +109,15 @@ pub fn spawn_worker(state: WorkerState) {
                             }
                         }
                     }
-                }
 
-                if tray_state
-                    .recording_toggle_flag
-                    .swap(false, Ordering::SeqCst)
-                {
-                    log::info!("[Worker] Recording toggle requested");
-                    if tray_state.is_recording.load(Ordering::SeqCst) {
-                        log::info!("[Worker] Stopping recording");
-                        if let Some(mut handle) = tray_state.handle.lock().take() {
-                            handle.stop();
-                        }
-                        tray_state.is_recording.store(false, Ordering::SeqCst);
-                        tray_state.record_start.lock().take();
-                        crate::tray::send_menu_update(
-                            crate::tray::TrayMenuUpdate::RecordingStopped,
+                    if tray_state
+                        .recording_toggle_flag
+                        .swap(false, Ordering::SeqCst)
+                    {
+                        log::info!(
+                            "[Worker] Recording toggle detected at {:?}",
+                            std::time::Instant::now()
                         );
-                    } else {
                         let monitors = tray_state.monitors.lock();
                         let selected = tray_state.selected_monitor.load(Ordering::SeqCst);
                         if selected >= monitors.len() {
@@ -155,6 +146,10 @@ pub fn spawn_worker(state: WorkerState) {
                                     crate::tray::send_menu_update(
                                         crate::tray::TrayMenuUpdate::RecordingStarted,
                                     );
+                                    log::info!(
+                                        "[Worker] Menu update sent (start) at {:?}",
+                                        std::time::Instant::now()
+                                    );
                                     log::info!("[Worker] Recording started");
                                 }
                                 Err(e) => {
@@ -163,10 +158,29 @@ pub fn spawn_worker(state: WorkerState) {
                             }
                         }
                     }
+                } else {
+                    if tray_state
+                        .recording_toggle_flag
+                        .swap(false, Ordering::SeqCst)
+                    {
+                        log::info!("[Worker] Stopping recording");
+                        if let Some(mut handle) = tray_state.handle.lock().take() {
+                            handle.stop();
+                        }
+                        tray_state.is_recording.store(false, Ordering::SeqCst);
+                        tray_state.record_start.lock().take();
+                        crate::tray::send_menu_update(
+                            crate::tray::TrayMenuUpdate::RecordingStopped,
+                        );
+                        log::info!(
+                            "[Worker] Menu update sent (stop) at {:?}",
+                            std::time::Instant::now()
+                        );
+                    }
                 }
             }
 
-            std::thread::sleep(Duration::from_millis(50));
+            std::thread::sleep(Duration::from_millis(10));
         }
     });
 

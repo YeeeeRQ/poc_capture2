@@ -201,10 +201,14 @@ impl eframe::App for CaptureApp {
         }
 
         if let Some(update) = crate::tray::get_pending_menu_update() {
+            log::info!(
+                "[App] Processing menu update at {:?}",
+                std::time::Instant::now()
+            );
             let is_recording = matches!(update, crate::tray::TrayMenuUpdate::RecordingStarted);
             crate::tray::update_tray_menu_from_main_thread(is_recording);
         }
 
-        ctx.request_repaint_after(Duration::from_millis(100));
+        ctx.request_repaint_after(Duration::from_millis(50));
     }
 }

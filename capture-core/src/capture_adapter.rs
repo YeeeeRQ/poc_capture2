@@ -247,7 +247,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             } else {
                 0.0
             };
-            log::info!(
+            log::debug!(
                 "[{}s] Written={} fps={:.1}",
                 format_f64(total.as_secs_f64(), 1),
                 written,

@@ -103,7 +103,7 @@ impl RecorderHandle {
                                 let elapsed = start_time.elapsed();
                                 if elapsed.saturating_sub(last_log) >= Duration::from_secs(1) {
                                     last_log = elapsed;
-                                    log::info!(
+                                    log::debug!(
                                         "[{}s] encoder fps={:.1}",
                                         format_f64(elapsed.as_secs_f64(), 1),
                                         enc.frames_written() as f64

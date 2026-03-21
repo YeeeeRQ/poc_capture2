@@ -14,6 +14,7 @@ mod app;
 mod main_window;
 mod settings;
 mod settings_window;
+mod timer_wakeup;
 mod tray;
 #[cfg(windows)]
 mod windows_window;
@@ -64,6 +65,10 @@ fn main() -> Result<()> {
         session_folder.clone(),
         monitors.clone(),
     );
+
+    if let Some(tray_state) = tray::get_tray_state() {
+        timer_wakeup::spawn_timer_wakeup_thread(Arc::clone(&tray_state.hwnd));
+    }
 
     spawn_worker(worker_state);
 
@@ -144,6 +149,9 @@ fn main() -> Result<()> {
         }),
     )
     .map_err(|e| anyhow::anyhow!("GUI error: {}", e))?;
+
+    timer_wakeup::stop_timer_wakeup_thread();
+    log::info!("[Main] Application exited");
 
     Ok(())
 }
