@@ -170,13 +170,22 @@ Worker 线程                        主线程 (app update loop)
      ├── send_menu_update(Started)        │
      │                                    │
      │                          ◄─────────┤
+     │                          Timer Wakeup Thread
+     │                          (InvalidateRect → WM_PAINT)
+     │                                    │
+     │                                    ▼
      │                          轮询 pending
      │                          set_menu(new_menu)
 ```
 
-**问题**：`tray-icon` 的 `TrayIcon` 包含 `Rc<RefCell<...>>`，非线程安全。无法从 worker 线程直接更新托盘菜单。
+**问题**：
+1. `tray-icon` 的 `TrayIcon` 包含 `Rc<RefCell<...>>`，非线程安全
+2. egui 的 `update()` 仅在 Windows 消息循环活跃时运行
 
-**解决方案**：待处理更新 + 主线程轮询。
+**解决方案**：
+- 待处理更新模式实现线程安全的菜单更新
+- Timer Wakeup Thread（100ms）发送 `InvalidateRect` 触发 `WM_PAINT`
+- 确保即使窗口在后台也能定期运行 `update()`
 
 **核心组件：**
 
@@ -188,8 +197,41 @@ Worker 线程                        主线程 (app update loop)
 | `get_pending_menu_update()` | `tray.rs` | 主线程调用以轮询待处理更新 |
 | `ThreadSafeTrayIconPtr` | `tray.rs` | 包裹 `TrayIcon` 指针的 `Send + Sync` 包装器 |
 | `update_tray_menu_from_main_thread()` | `tray.rs` | 重建菜单并调用 `set_menu()` |
+| `spawn_timer_wakeup_thread()` | `timer_wakeup.rs` | 通过 `InvalidateRect` 定期唤醒消息循环 |
 
 **初始化顺序**：`setup_tray()` 必须在 `spawn_worker()` **之前**调用，以确保 `PENDING_MENU_UPDATE` 在 worker 线程启动前完成初始化。
+
+### 定时器唤醒线程
+
+后台线程定期唤醒主窗口的消息循环，确保 UI 更新响应及时：
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Timer 线程 (100ms 间隔)                                │
+│      │                                                  │
+│      ├── 从 TrayState 读取 hwnd                        │
+│      │                                                  │
+│      └── InvalidateRect(hwnd, NULL, FALSE) ──► WM_PAINT │
+│                                                    │    │
+│                                          ┌──────────────┘
+│                                          ▼
+│                                   egui update() 被调用
+│                                          │
+│                                          ▼
+│                              处理待处理的托盘菜单更新
+```
+
+**问题**：当窗口未获得焦点时，egui 的 `update()` 仅在 Windows 消息循环活跃时运行。
+
+**解决方案**：`timer_wakeup` 线程每 100ms 发送 `InvalidateRect` 强制产生 `WM_PAINT`，即使窗口在后台也能触发 egui 的更新循环。
+
+**核心组件：**
+
+| 组件 | 文件 | 职责 |
+|------|------|------|
+| `spawn_timer_wakeup_thread()` | `timer_wakeup.rs` | 启动调用 `InvalidateRect` 的后台线程 |
+| `stop_timer_wakeup_thread()` | `timer_wakeup.rs` | 应用退出时停止定时器线程 |
+| `hwnd` | `TrayState` | 共享的 HWND 存储，由 `app.rs` 在窗口创建时设置 |
 
 ### 录屏线程模型
 
