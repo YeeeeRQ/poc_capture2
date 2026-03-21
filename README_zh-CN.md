@@ -96,7 +96,8 @@ GUI 是一个无边框浮动工具条：
 **托盘菜单：**
 - **显示窗口** — 显示浮动工具条
 - **截图** — 捕获当前屏幕
-- **开始录制** — 开始录屏
+- **开始录制** — 开始录屏（未录制时启用）
+- **停止录制** — 停止录屏（录制中启用）
 - **退出** — 退出应用
 
 **左键点击**托盘图标：显示窗口
@@ -338,6 +339,7 @@ frame_rx.recv_timeout(100ms)
 - **Worker 线程常驻运行** — 独立于窗口可见性，确保托盘命令在窗口隐藏时仍然有效
 - **Windows API 控制窗口显示/隐藏** — 直接调用 Windows API（`ShowWindow`、`SetWindowPlacement`）控制窗口可见性，绕过 egui 在窗口隐藏后 `ViewportCommand` 失效的限制
 - **托盘菜单待处理更新模式** — worker 线程设置待处理标志；主线程轮询并调用 `set_menu()` 重建整个菜单，解决 `tray-icon` 的 `Rc<RefCell<...>>` 线程安全问题
+- **设置持久化修复** — 解决了每帧重建 `local_settings` 导致设置更改丢失的问题；通过使用共享 `Arc<RwLock<Settings>>` 正确管理状态
 
 ---
 
@@ -366,8 +368,8 @@ frame_rx.recv_timeout(100ms)
 ## 二进制分发
 
 ```
-capture-gui.exe    # GUI 版本
-capture-cli.exe    # CLI 版本
+capture-gui.exe    # GUI（约 42MB，含嵌入字体）
+capture-cli.exe    # CLI（约 1.2MB）
 ffmpeg.exe         # FFmpeg 静态编译版
 ffprobe.exe        # FFprobe
 ```

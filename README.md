@@ -96,7 +96,8 @@ When the window is closed, the app continues running in the system tray:
 **Tray Menu:**
 - **Show Window** — restore the floating toolbar
 - **Screenshot** — capture current screen
-- **Start Recording** — begin recording
+- **Start Recording** — begin recording (enabled when not recording)
+- **Stop Recording** — stop recording (enabled when recording)
 - **Quit** — exit the application
 
 **Left-click** on tray icon: Show window
@@ -338,6 +339,7 @@ frame_rx.recv_timeout(100ms)
 - **Worker thread runs always** — independent of window visibility, ensures tray commands work even when hidden
 - **Windows API for window show/hide** — directly call Windows API (`ShowWindow`, `SetWindowPlacement`) to control window visibility, bypassing egui's limitation where `ViewportCommand` stops working after window is hidden
 - **Pending update pattern for tray menu** — worker thread sets a pending flag; main thread polls and calls `set_menu()` to rebuild the entire menu, solving the thread-safety issue with `tray-icon`'s `Rc<RefCell<...>>`
+- **Settings persistence** — fixed issue where `local_settings` recreation per frame caused settings changes to be lost; resolved by proper state management with shared `Arc<RwLock<Settings>>`
 
 ---
 
